@@ -15,13 +15,21 @@ import string
 import struct
 from scipy import ndimage
 
-from fsct.io import ply_io, pcd_io
+import ply_io, pcd_io
+from jakteristics import compute_features
 
 class dict2class:
 
     def __init__(self, d):
         for k, v in d.items():
             setattr(self, k, v)
+
+def get_fsct_path(location_in_fsct=""):
+    current_working_dir = os.getcwd()
+    output_path = current_working_dir[: current_working_dir.index("fsct") + 4]
+    if len(location_in_fsct) > 0:
+        output_path = os.path.join(output_path, location_in_fsct)
+    return output_path.replace("\\", "/")
 
 def make_folder_structure(params):
     
@@ -282,4 +290,15 @@ def make_dtm(params):
     params.pc.loc[:, 'n_z'] = params.pc.z - params.pc.VX.map(MAP)  
     
     return params
+
+def pointwise_classification(point_cloud):
+
+    point_cloud = point_cloud.astype('double')
+
+    features = compute_features(point_cloud[['x','y','z']], search_radius=0.10, feature_names=["surface_variation"], num_threads=8)
+
+    mask = pd.DataFrame(data=(features[:, 0] > np.nanmean(features)), columns=['mask'])
+
+    return mask#point_cloud[mask.values], point_cloud[~mask.values]
+
 

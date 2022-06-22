@@ -5,22 +5,31 @@ import itertools
 import numpy as np
 import pandas as pd
 from sklearn.neighbors import NearestNeighbors
+from sklearn import preprocessing
 from tqdm import tqdm
+from jakteristics import compute_features
 
-from fsct.tools import *
+from tools import *
 
 def save_pts(params, I, bx, by, bz):
 
-    pc = params.pc.loc[(params.pc.x.between(bx, bx + params.box_dims[0])) &
-                       (params.pc.y.between(by, by + params.box_dims[0])) &
-                       (params.pc.z.between(bz, bz + params.box_dims[0]))]
-
+    pc = params.tmp.loc[(params.tmp.x.between(bx, bx + params.box_dims[0])) &
+                       (params.tmp.y.between(by, by + params.box_dims[0])) &
+                       (params.tmp.z.between(bz, bz + params.box_dims[0]))]    
+    """
+    COMPUTE GEOMETRIC FEATURES OF POINTS
+    """ 
+    features = compute_features(pc.astype('double')[['x','y','z']], search_radius=0.05, feature_names=["linearity","surface_variation"], num_threads=1)
+    
     if len(pc) > params.min_points_per_box:
 
-        if len(pc) > params.max_points_per_box:
-            pc = pc.sample(n=params.max_points_per_box)
+            if len(pc) > params.max_points_per_box:
+                auxilary = np.column_stack((pc['scalar_refl'],features))
+                auxilary = preprocessing.minmax_scale(auxilary, feature_range=(0,1))
+                weights = np.amax(auxilary,axis=1)
+                pc = pc.sample(n=params.max_points_per_box,weights=weights)
 
-        np.save(os.path.join(params.working_dir, f'{I:07}'), pc[['x', 'y', 'z']].values)
+            np.save(os.path.join(params.working_dir, f'{I:>09}'), pc[['x', 'y', 'z']].values)
 
 def Preprocessing(params):
     
