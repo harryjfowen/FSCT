@@ -7,6 +7,7 @@ import pandas as pd
 import os
 import shutil
 from sklearn.cluster import DBSCAN
+from sklearn.cluster import OPTICS
 from scipy.interpolate import griddata
 from copy import deepcopy
 from multiprocessing import get_context
@@ -17,6 +18,8 @@ from scipy import ndimage
 
 import ply_io, pcd_io
 from jakteristics import compute_features
+import CSF
+import open3d as o3d
 
 class dict2class:
 
@@ -249,6 +252,37 @@ def low_resolution_hack_mode(point_cloud, num_iterations, min_spacing, num_procs
     print('Hacked point cloud shape:', point_cloud.shape)
     return point_cloud
 
+def classify_ground(params):
+    
+    """ 
+    Classify ground points using cloth simulation [returns indeces]
+    """
+    print("Classifying ground points...")
+    csf = CSF.CSF()
+
+    csf.params.bSloopSmooth = True
+    csf.params.cloth_resolution = 0.33
+    csf.params.class_threshold = 0.33
+
+    xyz=params.pc[['x', 'y', 'z']].to_numpy().astype('double')
+
+    csf.setPointCloud(xyz)
+    ground = CSF.VecInt()
+    non_ground = CSF.VecInt()
+
+    csf.do_filtering(ground, non_ground)
+
+    ground_idx = params.pc.loc[ground].index.to_numpy()
+
+    # Filter remaining stumps
+    features = compute_features(params.pc.loc[ground].astype('double')[['x','y','z']], search_radius=0.075, feature_names=["verticality"], num_threads=1)
+    tmp_idx = np.where(features.ravel() < 0.75)
+
+    print("Finished with ground")
+    #return(params.pc.loc[ground].index.to_numpy())
+    return(ground_idx[tmp_idx])
+
+
 def make_dtm(params):
     
     """ 
@@ -262,7 +296,7 @@ def make_dtm(params):
     ### voxelise, identify lowest points and create DTM
     params.pc = voxelise(params.pc, params.grid_resolution, z=False)
     VX_map = params.pc.loc[~params.pc.VX.duplicated()][['xx', 'yy', 'VX']]
-    ground = params.pc.loc[params.pc.label == params.terrain_class] 
+    ground = params.pc.loc[params.pc.label == params.terrain_class]#locate labels that equal the terrain class number
     ground.loc[:, 'zmin'] = ground.groupby('VX').z.transform(np.median)
     ground = ground.loc[ground.z == ground.zmin]
     ground = ground.loc[~ground.VX.duplicated()]
@@ -291,14 +325,93 @@ def make_dtm(params):
     
     return params
 
-def pointwise_classification(point_cloud):
-
-    point_cloud = point_cloud.astype('double')
-
-    features = compute_features(point_cloud[['x','y','z']], search_radius=0.10, feature_names=["surface_variation"], num_threads=8)
-
-    mask = pd.DataFrame(data=(features[:, 0] > np.nanmean(features)), columns=['mask'])
-
-    return mask#point_cloud[mask.values], point_cloud[~mask.values]
+# def denoising(params):
+#     #statistical dennoising
+#     pcd = o3d.geometry.PointCloud()
+#     pcd.points = o3d.utility.Vector3dVector(xyz)
+#     cl, ind = pcd.remove_statistical_outlier(nb_neighbors=20,std_ratio=2.0)
+#     xyz = numpy.asarray(cl.points)
 
 
+#################
+#
+# FILTERING MODULE 
+
+from sklearn.cluster import DBSCAN
+from sklearn.cluster import OPTICS
+
+def svd_evals(arr):
+    #Calculates eigenvalues form 3d array
+    centroid = np.average(arr, axis=0)
+    _, evals, evecs = np.linalg.svd(arr - centroid, full_matrices=False)
+    return evals
+
+
+def cluster_filter(arr, max_dist, eval_threshold):
+    clusterer = OPTICS(max_dist,n_jobs=-1).fit(arr)
+    labels = clusterer.labels_
+    final_evals = np.zeros([labels.shape[0], 3])
+    for L in np.unique(labels):
+        ids = np.where(labels == L)[0]
+        if (L != -1) & len(ids) >= 3:
+            e = svd_evals(arr[ids])
+            final_evals[ids] = e
+    ratio = np.asarray([i / np.sum(i) for i in final_evals])
+    print(ratio[:, 0])
+    return ratio[:, 0] >= eval_threshold
+
+
+
+def upscale_idx(base, arr, attr):
+
+    
+
+    assert base.shape[0] == attr.shape[0], '"base" and "attr" must have the same number of samples.'
+
+    idx = set_nbrs_knn(base, arr, 1, return_dist=False)
+    idx = idx.astype(int)
+    newattr = attr[idx]
+
+    return np.reshape(newattr, newattr.shape[0])
+
+
+def set_nbrs_knn(arr, pts, knn, return_dist=True, block_size=100000):
+
+    knn = int(knn)
+
+    nbrs = NearestNeighbors(n_neighbors=knn, metric='euclidean',
+                            algorithm='kd_tree', leaf_size=15,
+                            n_jobs=-1).fit(arr)
+
+    # Making sure block_size is limited by at most the number of points in
+    # arr.
+    if block_size > pts.shape[0]:
+        block_size = pts.shape[0]
+
+    # Creating block of ids.
+    ids = np.arange(pts.shape[0])
+    ids = np.array_split(ids, int(pts.shape[0] / block_size))
+
+    # Initializing variables to store distance and indices.
+    if return_dist is True:
+        distance = np.zeros([pts.shape[0], knn])
+    indices = np.zeros([pts.shape[0], knn])
+
+    # Checking if the function should return the distance as well or only the
+    # neighborhood indices.
+    if return_dist is True:
+        # Obtaining the neighborhood indices and their respective distances
+        # from the center point by looping over blocks of ids.
+        for i in ids:
+            nbrs_dist, nbrs_ids = nbrs.kneighbors(pts[i])
+            distance[i] = nbrs_dist
+            indices[i] = nbrs_ids
+        return distance, indices
+
+    elif return_dist is False:
+        # Obtaining the neighborhood indices only  by looping over blocks of
+        # ids.
+        for i in ids:
+            nbrs_ids = nbrs.kneighbors(pts[i], return_distance=False)
+            indices[i] = nbrs_ids
+        return indices

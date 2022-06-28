@@ -16,7 +16,7 @@ import torch_geometric
 from torch_geometric.data import Dataset, DataLoader, Data
 from model import Net
 
-from fsct.tools import save_file, make_dtm 
+from tools import save_file, make_dtm 
 
 sys.setrecursionlimit(10 ** 8) # Can be necessary for dealing with large point clouds.
 
@@ -64,12 +64,12 @@ def SemanticSegmentation(params):
                                      num_workers=0)
 
     # initialise model
-    model = Net(num_classes=4).to(params.device)
+    model = Net(num_classes=2).to(params.device)
     model.load_state_dict(torch.load(params.model_filename, map_location=params.device), strict=False)
     model.eval()
 
     with torch.no_grad():
-        output_point_cloud = np.zeros((0, 3 + 4))
+        output_point_cloud = np.zeros((0, 3 + 2))#changed 4 to 2
         output_list = []
         for data in tqdm(test_loader, disable=False if params.verbose else True):
             data = data.to(params.device)
@@ -88,32 +88,34 @@ def SemanticSegmentation(params):
 
         classified_pc = np.vstack(output_list)
 
+    print(classified_pc[:, :3])
     # clean up anything no longer needed to free RAM.
     del outputb, out, batches, pos, output  
 
     # choose most confident label
     if params.verbose: print("Choosing most confident labels...")
-    neighbours = NearestNeighbors(n_neighbors=16, 
+    neighbours = NearestNeighbors(n_neighbors=9, 
                                   algorithm='kd_tree', 
                                   metric='euclidean', 
-                                  radius=0.05).fit(classified_pc[:, :3])
+                                  radius=0.03).fit(classified_pc[:, :3])
     _, indices = neighbours.kneighbors(params.pc[['x', 'y', 'z']].values)
 
-    params.pc = params.pc.drop(columns=[c for c in params.pc.columns if c in ['label', 'pTerrain', 'pLeaf', 'pWood', 'pCWD']])
+    """
+    Original cloud has now been classfied - add in Ground points along with a value in label column 
+    """
 
-    labels = np.zeros((params.pc.shape[0], 4))
-    labels[:, :4] = np.median(classified_pc[indices][:, :, -4:], axis=1)
-    params.pc.loc[params.pc.index, 'label'] = np.argmax(labels[:, :4], axis=1)
 
-    probs = pd.DataFrame(index=params.pc.index, data=labels[:, :4], columns=['pTerrain', 'pLeaf', 'pCWD', 'pWood'])
+    print("Chosen labels")
+
+
+    params.pc = params.pc.drop(columns=[c for c in params.pc.columns if c in ['label', 'pWood', 'pLeaf']])
+
+    labels = np.zeros((params.pc.shape[0], 2))
+    labels[:, :2] = np.median(classified_pc[indices][:, :, -2:], axis=1)
+    params.pc.loc[params.pc.index, 'label'] = np.argmax(labels[:, :2], axis=1)
+
+    probs = pd.DataFrame(index=params.pc.index, data=labels[:, :2], columns=['pWood','pLeaf'])
     params.pc = params.pc.join(probs)
-    #save_file(os.path.join(params.odir, '{}.segmented.concat.{}'.format(params.filename[:-4], params.output_fmt)), 
-    #          pd.concat([params.pc, probs]), 
-    #          additional_fields=['label', 'nz'])
-    #          additional_fields=['label', 'pTerrain', 'pLeaf', 'pWood', 'pCWD']) 
-   
-    #idx = (params.pc.label == 1) & (params.pc.pWood > .12)
-    #params.pc.loc[idx, 'label'] = params.stem_class
  
     params.pc[['x', 'y', 'z']] += params.global_shift
 
@@ -123,7 +125,7 @@ def SemanticSegmentation(params):
 
     save_file(os.path.join(params.odir, '{}.segmented.{}'.format(params.filename[:-4], params.output_fmt)), 
               params.pc.loc[~params.pc.buffer], 
-              additional_fields=['n_z', 'label', 'pTerrain', 'pLeaf', 'pCWD', 'pWood'] + params.additional_headers)
+              additional_fields=['n_z', 'label', 'Ground', 'pWood', 'pLeaf'] + params.additional_headers)
 
     params.sem_seg_total_time = time.time() - params.sem_seg_start_time
     if not params.keep_npy: [os.unlink(f) for f in test_dataset.filenames]

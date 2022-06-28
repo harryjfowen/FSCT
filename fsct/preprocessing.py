@@ -11,80 +11,57 @@ from jakteristics import compute_features
 
 from tools import *
 
-def save_pts(params, I, bx, by, bz):
+def save_pts_v2(params, I, bx, by, bz):
 
-    pc = params.tmp.loc[(params.tmp.x.between(bx, bx + params.box_dims[0])) &
-                       (params.tmp.y.between(by, by + params.box_dims[0])) &
-                       (params.tmp.z.between(bz, bz + params.box_dims[0]))]    
+    pc = params.pc.loc[(params.pc.x.between(bx, bx + params.box_dims[0])) &
+                       (params.pc.y.between(by, by + params.box_dims[0])) &
+                       (params.pc.z.between(bz, bz + params.box_dims[0]))]    
     """
     COMPUTE GEOMETRIC FEATURES OF POINTS
     """ 
-    features = compute_features(pc.astype('double')[['x','y','z']], search_radius=0.05, feature_names=["linearity","surface_variation"], num_threads=1)
+    features = compute_features(pc.astype('double')[['x','y','z']], search_radius=0.10, feature_names=["linearity","surface_variation"], num_threads=1)
     
     if len(pc) > params.min_points_per_box:
 
             if len(pc) > params.max_points_per_box:
+                features[:, 1]=1-features[:, 1]
                 auxilary = np.column_stack((pc['scalar_refl'],features))
                 auxilary = preprocessing.minmax_scale(auxilary, feature_range=(0,1))
                 weights = np.amax(auxilary,axis=1)
                 pc = pc.sample(n=params.max_points_per_box,weights=weights)
 
             np.save(os.path.join(params.working_dir, f'{I:>09}'), pc[['x', 'y', 'z']].values)
+            #np.savetxt(os.path.join(params.working_dir, f'{I:07}.txt'), pc[['x', 'y', 'z']].values)
+
+def save_pts(params, I, bx, by, bz):
+
+    pc = params.pc.loc[(params.pc.x.between(bx, bx + params.box_dims[0])) &
+                       (params.pc.y.between(by, by + params.box_dims[0])) &
+                       (params.pc.z.between(bz, bz + params.box_dims[0]))]
+
+    if len(pc) > params.min_points_per_box:
+
+        if len(pc) > params.max_points_per_box:
+            pc = pc.sample(n=params.max_points_per_box)
+
+        #np.save(os.path.join(params.working_dir, f'{I:07}'), pc[['x', 'y', 'z']].values)
+        np.savetxt(os.path.join(params.working_dir, f'{I:07}.txt'), pc[['x', 'y', 'z']].values)
+
 
 def Preprocessing(params):
     
-    if params.verbose: print('\n----- preprocessing started -----')
-    start_time = time.time()
-    params.point_cloud = os.path.abspath(params.point_cloud)
-    params.directory, params.filename = os.path.split(params.point_cloud)
-    params.basename = os.path.splitext(params.filename)[0]
-    params.tile = params.filename.split('.')[0]
-    params.input_format = os.path.splitext(params.point_cloud)[1]
-    if isinstance(params.tile, str) and len(params.tile) == 3: params.tile = int(params.tile)
+    
+    # classify ground returns using cloth simulation
+    params.ground_idx = classify_ground(params)
+    #veg_idx = params.pc[~np.in1d(np.arange(len(params.pc)), ground_idx].index.values
 
-    # create directory structure
-    params = make_folder_structure(params)
-
-    # read in pc
-    params.pc, params.additional_headers = load_file(filename=params.point_cloud,
-                                                     additional_headers=True,
-                                                     verbose=params.verbose)
+    # remove ground points 
+    params.pc = params.pc.drop(params.ground_idx)
 
     # compute plot centre, global shift and bounding box
     params.plot_centre = compute_plot_centre(params.pc)
-    params.global_shift = params.pc[['x', 'y', 'z']].mean()
+    params.global_shift = params.pc[['x', 'y', 'z']].mean()-params.pc[['x', 'y', 'z']].mean()
     params.bbox = compute_bbox(params.pc[['x', 'y', 'z']])
-    
-    # buffer 
-    params.pc.loc[:, 'buffer'] = False # might not be needed
-    if params.buffer > 0:
-        
-        tile_index = pd.read_csv(params.tile_index, sep=' ', names=['fname', 'x', 'y'])
-
-        # locate 8 nearest tiles
-        nn = NearestNeighbors(n_neighbors=9).fit(tile_index[['x', 'y']])
-        distance, neighbours = nn.kneighbors(tile_index.loc[tile_index.fname == params.tile][['x', 'y']], 
-                                   return_distance=True)
-        neighbours = neighbours[np.where(distance <= params.max_distance_between_tiles)]
-
-        # read in tiles
-        buffer = pd.DataFrame()
-        for tile in tqdm(tile_index.loc[neighbours[1:]].itertuples(), 
-                         total=len(neighbours)-1,
-                         desc='buffering tile with neighbouring points',
-                         disable=False if params.verbose else True):
-            fname = glob.glob(os.path.join(params.directory, f'*{tile.fname:03}*{params.input_format}'))[0]
-            buffer = buffer.append(load_file(os.path.join(params.directory, fname)))
-
-        # select desired points
-        buffer = buffer.loc[(buffer.x.between(params.pc.x.min() - params.buffer, 
-                                              params.pc.x.max() + params.buffer)) &
-                            (buffer.y.between(params.pc.y.min() - params.buffer, 
-                                              params.pc.y.max() + params.buffer))]
-
-        buffer.loc[:, 'buffer'] = True
-        if params.verbose: print(f'buffer adds an additional {len(buffer)} points')
-        params.pc = params.pc.append(buffer)
 
     if params.subsample: # subsample if specified
         if params.verbose: print('downsampling to: %s m' % params.subsampling_min_spacing)
