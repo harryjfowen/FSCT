@@ -12,7 +12,7 @@ import scipy
 	READ IN DATA
 """
 pc, additional_headers = load_file(filename='/home/harryjfowen/Desktop/spa06_training/SPA06_000.downsample.ply',additional_headers=True,verbose=True)
-pc = downsample(pc, 0.01)
+pc = downsample(pc, 0.025)
 
 # classify ground 
 csf = CSF.CSF()
@@ -48,14 +48,14 @@ pc = pd.DataFrame(xyz, columns = ['x','y','z','refl'])
 pc.loc[idx[0], 'label'] = int(1)
 pc['label'] = pc['label'].fillna(2)
 
-save_file('/home/harryjfowen/Desktop/spa06_segtest_lw.ply', pc, additional_headers + ['label'], verbose = True)
+save_file('/home/harryjfowen/Desktop/spa06_segtest_lw.ply', pc, ['label'], verbose = True)
 
 
 
 
 
-test=pc[['x', 'y', 'z']].to_numpy().astype('double')
-cluster_filter(xyz[:,:3], 0.05, 0.1)
+#test=pc[['x', 'y', 'z']].to_numpy().astype('double')
+#cluster_filter(xyz[:,:3], 0.05, 0.1)
 
 
 
