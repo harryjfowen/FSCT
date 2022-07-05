@@ -7,56 +7,62 @@ os.chdir('/home/harryjfowen/FSCT/fsct')
 
 from tools import *
 import CSF
-import scipy
+
 """
 	READ IN DATA
 """
-pc, additional_headers = load_file(filename='/home/harryjfowen/Desktop/spa06_training/SPA06_000.downsample.ply',additional_headers=True,verbose=True)
-pc = downsample(pc, 0.025)
+pcRAW, additional_headers = load_file(filename='/home/harryjfowen/Desktop/SPA19_011.ply',additional_headers=True,verbose=True)
 
 # classify ground 
 csf = CSF.CSF()
-
 csf.params.bSloopSmooth = True
 csf.params.cloth_resolution = 0.10
 csf.params.class_threshold = 0.30 
-
-#statistical dennoising
-# import open3d as o3d
-# pcd = o3d.geometry.PointCloud()
-# pcd.points = o3d.utility.Vector3dVector(pc[['x', 'y', 'z']].to_numpy().astype('double'))
-# cl, ind = pcd.remove_statistical_outlier(nb_neighbors=20,std_ratio=2.0)
-# xyz = np.asarray(cl.points)
-
-xyz = pc[['x', 'y', 'z', 'refl']].to_numpy()
-csf.setPointCloud(xyz)
+csf.setPointCloud(pcRAW[['x', 'y', 'z']].to_numpy().astype('double'))
 ground = CSF.VecInt()
 non_ground = CSF.VecInt()
 
 csf.do_filtering(ground, non_ground)
-#pc = pc.drop(ground).reset_index(drop=True)
-xyz = xyz[ground]
+pcRAW = pcRAW.loc[pcRAW.index.values[non_ground]].reset_index(drop=True)
 
-##
-featuresFine = compute_features(xyz[:,:3].astype('double'), search_radius=0.06, feature_names=["surface_variation","linearity"], num_threads=8)
-featuresCoarse = compute_features(xyz[:,:3].astype('double'), search_radius=0.30, feature_names=["linearity"], num_threads=8)
+pc = downsample(pcRAW, 0.01)
+idx = pc.index.values
 
-refl_cutoff=scipy.stats.scoreatpercentile(xyz[:, 3],75)
-idx = np.where((xyz[:, 3] > -5) | (featuresFine[:, 0] < 0.1) | (featuresFine[:, 1] > 75) | (featuresCoarse[:, 0] > 75))
+# filter based on reflectance 
+boolRfl = (pc['refl'] <= -5)
 
-pc = pd.DataFrame(xyz, columns = ['x','y','z','refl'])
-pc.loc[idx[0], 'label'] = int(1)
-pc['label'] = pc['label'].fillna(2)
+#	Extract features on canopy points with reflectance below a threshold (i.e. leaf points)
+featuresFine = compute_features(pc[['x', 'y', 'z']][boolRfl].to_numpy().astype('double'), search_radius=0.05, feature_names=["linearity","verticality"], num_threads=8)
+boolFine = (featuresFine[:, 0] < 0.75) & (featuresFine[:, 1] < 0.75)
 
-save_file('/home/harryjfowen/Desktop/spa06_segtest_lw.ply', pc, ['label'], verbose = True)
+# clean up wood file 
+woodIDX = idx[~boolRfl]
 
+woodIDX = woodIDX[denoise(pc.loc[woodIDX])]
+woodIDX = woodIDX[cluster_filter(pc.loc[woodIDX], 0.05, 100, 0.66)]
 
+# Filter values of leaf points that still resemble wood points
+leafIDX = idx[boolRfl][boolFine]
 
+##2nd Pass but at a coarser scale. Now only leaf points should remain
+featuresCoarse = compute_features(pc[['x', 'y', 'z']].loc[leafIDX].to_numpy().astype('double'), search_radius=0.25, feature_names=["linearity","verticality"], num_threads=8)
+boolCoarse = (featuresCoarse[:, 0] < 0.80) & (featuresCoarse[:, 1] < 0.80)
 
+leafIDX = leafIDX[boolCoarse]
+leafClust = cluster_filter(pc.loc[leafIDX], 0.05, 100, 0.80)
+#woodIDX = np.hstack((woodIDX, leafIDX[leafClust]))
+leafIDX = leafIDX[~leafClust]
 
-#test=pc[['x', 'y', 'z']].to_numpy().astype('double')
-#cluster_filter(xyz[:,:3], 0.05, 0.1)
+save_file('/home/harryjfowen/Desktop/spa19_leaf.ply', pcRAW.loc[leafIDX], additional_headers, verbose = True)
+save_file('/home/harryjfowen/Desktop/spa19_wood.ply', pcRAW.loc[woodIDX], additional_headers, verbose = True)
 
+# add label column
+pc.loc[leafIDX, 'label'] = int(2)
+pc.loc[woodIDX, 'label'] = int(1)
+pc = pc.dropna()
 
+# upscale and average labels at neighbourhood 
+out = smooth_classifcation(pc, pcRAW, 5)
 
-
+# write out cloud with labels 
+save_file('/home/harryjfowen/Desktop/spa06_segtest_KNN.ply', out, additional_headers + ['label'], verbose = True)

@@ -4,7 +4,7 @@ import numpy as np
 import random
 import glob
 from sklearn.neighbors import NearestNeighbors
-import augmentations *
+from data_augmentation import augmentations
 
 class TrainingDataset(Dataset):
     def __init__(self, root_dir, device, min_sample_points, max_sample_points, augmentation):
@@ -26,7 +26,7 @@ class TrainingDataset(Dataset):
         y = point_cloud[:, self.label_index] - 1
 
         if (self.augmentation):
-            x, y = augmentations(x, y, self.min_sample_points)
+            x, y = data_augmentation(x, y, self.min_sample_points)
 
         x = torch.from_numpy(x.copy()).type(torch.float).to(self.device)
         y = torch.from_numpy(y.copy()).type(torch.long).to(self.device)

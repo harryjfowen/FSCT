@@ -23,15 +23,15 @@ def save_pts_v2(params, I, bx, by, bz):
     
     if len(pc) > params.min_points_per_box:
 
-            if len(pc) > params.max_points_per_box:
+            if len(pc) > params.max_pts:
                 features[:, 1]=1-features[:, 1]
                 auxilary = np.column_stack((pc['scalar_refl'],features))
                 auxilary = preprocessing.minmax_scale(auxilary, feature_range=(0,1))
                 weights = np.amax(auxilary,axis=1)
-                pc = pc.sample(n=params.max_points_per_box,weights=weights)
+                pc = pc.sample(n=params.max_pts,weights=weights)
 
-            np.save(os.path.join(params.working_dir, f'{I:>09}'), pc[['x', 'y', 'z']].values)
-            #np.savetxt(os.path.join(params.working_dir, f'{I:07}.txt'), pc[['x', 'y', 'z']].values)
+            np.save(os.path.join(params.odir, f'{I:>09}'), pc[['x', 'y', 'z']].values)
+            #np.savetxt(os.path.join(params.odir, f'{I:07}.txt'), pc[['x', 'y', 'z']].values)
 
 def save_pts(params, I, bx, by, bz):
 
@@ -39,66 +39,97 @@ def save_pts(params, I, bx, by, bz):
                        (params.pc.y.between(by, by + params.box_dims[0])) &
                        (params.pc.z.between(bz, bz + params.box_dims[0]))]
 
-    if len(pc) > params.min_points_per_box:
+    if len(pc) > params.min_pts:
 
-        if len(pc) > params.max_points_per_box:
-            pc = pc.sample(n=params.max_points_per_box)
+        if len(pc) > params.max_pts:
+            pc = pc.sample(n=params.max_pts)
 
-        #np.save(os.path.join(params.working_dir, f'{I:07}'), pc[['x', 'y', 'z']].values)
-        np.savetxt(os.path.join(params.working_dir, f'{I:07}.txt'), pc[['x', 'y', 'z']].values)
-
+        if params.training:
+            np.save(os.path.join(params.odir, f'{I:07}'), pc[['x', 'y', 'z', 'label']].values)
+            np.savetxt(os.path.join(params.odir, f'{I:07}.txt'), pc[['x', 'y', 'z', 'label']].values)
+        else:
+            np.save(os.path.join(params.odir, f'{I:07}'), pc[['x', 'y', 'z']].values)
 
 def Preprocessing(params):
     
+    if params.verbose: print('\n----- preprocessing started -----')
+    start_time = time.time()
+
+    params.training = False
+
+#                                     Establish preprocessing mode                                             #
+
+    if ([any(k for k in params.point_cloud if 'train' in k)]):
+        print("Preprocessing training point clouds...")
+        params.training = True
+
+    elif (len(params.point_cloud) == 1):
+        print("Processing single point cloud for inference....")
+        params = make_folder_structure(params)
+
+    if ([any(k for k in params.point_cloud if 'validation' in k)]):
+        if(params.validation):
+            print("Preprocessing validation point clouds...")
+
+    if (params.training==True):
+        make_training_folders(params)
     
-    # classify ground returns using cloth simulation
-    params.ground_idx = classify_ground(params)
-    #veg_idx = params.pc[~np.in1d(np.arange(len(params.pc)), ground_idx].index.values
+#                                      Begin preprocessing                                             #
+    
+    for pc_file in params.point_cloud:
+        if params.verbose: print('\n...')
 
-    # remove ground points 
-    params.pc = params.pc.drop(params.ground_idx)
+        params.pc, headers = load_file(filename=pc_file,
+                                       additional_headers=True,
+                                       verbose=params.verbose)
+                                       
+        params.ground = classify_ground(params)
 
-    # compute plot centre, global shift and bounding box
-    params.plot_centre = compute_plot_centre(params.pc)
-    params.global_shift = params.pc[['x', 'y', 'z']].mean()-params.pc[['x', 'y', 'z']].mean()
-    params.bbox = compute_bbox(params.pc[['x', 'y', 'z']])
+        if(params.training):
+            params.pc = params.pc[~params.ground]
+            params.odir = os.path.dirname(pc_file) + '/sample_dir'
 
-    if params.subsample: # subsample if specified
-        if params.verbose: print('downsampling to: %s m' % params.subsampling_min_spacing)
-        params.pc = downsample(params.pc, params.subsampling_min_spacing, 
-                             accurate=False, keep_points=False)
+        params.plot_centre = compute_plot_centre(params.pc)
+        params.global_shift = params.pc[['x', 'y', 'z']].mean()#-params.pc[['x', 'y', 'z']].mean()
+        params.bbox = compute_bbox(params.pc[['x', 'y', 'z']])
 
-    # apply global shift
-    if params.verbose: print('global shift:', params.global_shift.values)
-    params.pc[['x', 'y', 'z']] = params.pc[['x', 'y', 'z']] - params.global_shift
+        if params.point_spacing != 0: # subsample if specified
+            if params.verbose: print('downsampling to: %s m' % params.point_spacing)
+            params.pc = downsample(params.pc, params.point_spacing, 
+                                   accurate=False, keep_points=False)
+
+        if params.verbose: print('global shift:', params.global_shift.values)
+        params.pc[['x', 'y', 'z']] = params.pc[['x', 'y', 'z']] - params.global_shift
 	
-    params.pc.reset_index(inplace=True)
-    params.pc.loc[:, 'pid'] = params.pc.index
+        params.pc.reset_index(inplace=True)
+        params.pc.loc[:, 'pid'] = params.pc.index
 
-    # generate bounding boxes
-    xmin, xmax = np.floor(params.pc.x.min()), np.ceil(params.pc.x.max())
-    ymin, ymax = np.floor(params.pc.y.min()), np.ceil(params.pc.y.max())
-    zmin, zmax = np.floor(params.pc.z.min()), np.ceil(params.pc.z.max())
+        # generate bounding boxes
+        xmin, xmax = np.floor(params.pc.x.min()), np.ceil(params.pc.x.max())
+        ymin, ymax = np.floor(params.pc.y.min()), np.ceil(params.pc.y.max())
+        zmin, zmax = np.floor(params.pc.z.min()), np.ceil(params.pc.z.max())
 
-    box_overlap = params.box_dims[0] * params.box_overlap[0]
+        box_overlap = params.box_dims[0] * params.box_overlap[0]
 
-    x_cnr = np.arange(xmin - box_overlap, xmax + box_overlap, box_overlap)
-    y_cnr = np.arange(ymin - box_overlap, ymax + box_overlap, box_overlap)
-    z_cnr = np.arange(zmin - box_overlap, zmax + box_overlap, box_overlap)
+        x_cnr = np.arange(xmin - box_overlap, xmax + box_overlap, box_overlap)
+        y_cnr = np.arange(ymin - box_overlap, ymax + box_overlap, box_overlap)
+        z_cnr = np.arange(zmin - box_overlap, zmax + box_overlap, box_overlap)
 
-    # multithread segmenting points into boxes and save
-    threads = []
-    for i, (bx, by, bz) in enumerate(itertools.product(x_cnr, y_cnr, z_cnr)):
-        threads.append(threading.Thread(target=save_pts, args=(params, i, bx, by, bz)))
+        # multithread segmenting points into boxes and save
+        threads = []
+        for i, (bx, by, bz) in enumerate(itertools.product(x_cnr, y_cnr, z_cnr)):
+            threads.append(threading.Thread(target=save_pts, args=(params, i, bx, by, bz)))
 
-    for x in tqdm(threads, 
-                  desc='generating data blocks',
-                  disable=False if params.verbose else True):
-        x.start()
+        for x in tqdm(threads, 
+                    desc='generating data blocks',
+                    disable=False if params.verbose else True):
+            x.start()
 
-    for x in threads:
-        x.join()
+        for x in threads:
+            x.join()
 
-    if params.verbose: print("Preprocessing done in {} seconds\n".format(time.time() - start_time))
+        print('')
+
+    if params.verbose: print("---------- Preprocessing done in {} seconds ----------\n".format(time.time() - start_time))
     
     return params

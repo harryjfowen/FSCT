@@ -1,6 +1,5 @@
 from tools import load_file, save_file, get_fsct_path
 from model import Net
-from fsct_exceptions import NoDataFound
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,8 +13,8 @@ import shutil
 
 from jakteristics import compute_features
 from sklearn import preprocessing
-import numpy as np
 from sklearn.neighbors import NearestNeighbors
+
 
 def check_and_fix_data_directory_structure(self, data_sub_directory):
     """
@@ -23,18 +22,16 @@ def check_and_fix_data_directory_structure(self, data_sub_directory):
     the FSCT directory if they do not already exist.
     """
     fsct_dir = get_fsct_path()
-    dir_list = [
-        os.path.join(fsct_dir, "data"),
-        os.path.join(fsct_dir, "data", data_sub_directory),
-        os.path.join(fsct_dir, "data", data_sub_directory, "sample_dir"),
-    ]
+    dir_list = [os.path.join(fsct_dir, "data"),
+                os.path.join(fsct_dir, "data", data_sub_directory),
+                os.path.join(fsct_dir, "data", data_sub_directory, "sample_dir")]
 
     for directory in dir_list:
         if not os.path.isdir(directory):
             os.makedirs(directory)
             print(directory, "directory created.")
 
-        elif "sample_dir" in directory and params.clean_sample_directories==1:
+        elif "sample_dir" in directory and params.clean_cwd:
             shutil.rmtree(directory, ignore_errors=True)
             os.makedirs(directory)
             print(directory, "directory created.")
@@ -43,15 +40,11 @@ def check_and_fix_data_directory_structure(self, data_sub_directory):
             print(directory, "directory found.")
 
 
-def global_shift_to_origin(self, point_cloud):
-
-    point_cloud_min, point_cloud_max = point_cloud[['x', 'y', 'z']].min(), point_cloud[['x', 'y', 'z']].max()
-
-    point_cloud_centre = (point_cloud_min + ((point_cloud_max - point_cloud_min) / 2)).values
-
-    point_cloud[['x', 'y', 'z']] = point_cloud[['x', 'y', 'z']] - point_cloud_centre
-
-    return point_cloud, point_cloud_centre
+def global_shift_to_origin(self, pc):
+    pc_min, pc_max = pc[['x', 'y', 'z']].min(), pc[['x', 'y', 'z']].max()
+    pc_centre = (pc_min + ((pc_max - pc_min) / 2)).values
+    pc[['x', 'y', 'z']] = pc[['x', 'y', 'z']] - pc_centre
+    return pc, pc_centre
 
 
 def save_pts(params, I, bx, by, bz):
@@ -60,12 +53,11 @@ def save_pts(params, I, bx, by, bz):
                       (params.pc.y.between(by, by + params.box_dims[0])) &
                       (params.pc.z.between(bz, bz + params.box_dims[0]))]
 
-    if len(pc) > params.min_points_per_box:
-
-        if len(pc) > params.max_points_per_box:
+    if len(pc) > params.min_pts:
+        if len(pc) > params.max_pts:
             pc = pc.sample(n=params.max_points_per_box)
 
-        np.savetxt(os.path.join(params.working_dir, f'{I:07}.txt'), pc[['x', 'y', 'z']].values)
+        np.savetxt(os.path.join(params.cwd, f'{I:07}.txt'), pc[['x', 'y', 'z']].values)
 
 
     #needs to take a point cloud and path as input 
@@ -83,10 +75,8 @@ def preprocess_point_cloud(params):
     # remove ground points 
     params.pc = params.pc.drop(params.ground_idx)
 
-    if params.subsample: # subsample if specified
-        if params.verbose: print('downsampling to: %s m' % params.subsampling_min_spacing)
-        params.pc = downsample(params.pc, params.subsampling_min_spacing, 
-                             accurate=False, keep_points=False)
+    # downsample point cloud 
+    params.pc = downsample(params.pc, params.point_spacing,accurate=False, keep_points=False)
     
     params.pc.reset_index(inplace=True)
     params.pc.loc[:, 'pid'] = params.pc.index
@@ -131,18 +121,15 @@ def preprocessing_setup(self, data_subdirectory):
 
 
 def update_log(epoch, epoch_loss, epoch_acc, val_epoch_loss, val_epoch_acc):
-    training_history = np.vstack(
-        (training_history, np.array([[epoch, epoch_loss, epoch_acc, val_epoch_loss, val_epoch_acc]]))
-    )
+    training_history = np.vstack((training_history, np.array([[epoch, epoch_loss, epoch_acc, val_epoch_loss, val_epoch_acc]])))
     try:
         np.savetxt(os.path.join(get_fsct_path("model"), "training_history.csv"), training_history)
     except PermissionError:
         print("training_history not saved this epoch, please close training_history.csv to enable saving.")
         try:
-            np.savetxt(
-                os.path.join(get_fsct_path("model"), "training_history_permission_error_backup.csv"),
-                training_history,
-            )
+            np.savetxt(os.path.join(get_fsct_path("model"),
+                       "training_history_permission_error_backup.csv"),
+                        training_history)
         except PermissionError:
             pass
 
@@ -204,68 +191,6 @@ class ValidationDataset(Dataset):
             data = Data(pos=x, x=None, y=y)
             return data
 
-
-def augmentations(x, y, min_sample_points):
-    def rotate_3d(points, rotations):
-        rotations[0] = np.radians(rotations[0])
-        rotations[1] = np.radians(rotations[1])
-        rotations[2] = np.radians(rotations[2])
-
-        roll_mat = np.array(
-            [
-                [1, 0, 0],
-                [0, np.cos(rotations[0]), -np.sin(rotations[0])],
-                [0, np.sin(rotations[0]), np.cos(rotations[0])],
-            ]
-        )
-
-        pitch_mat = np.array(
-            [
-                [np.cos(rotations[1]), 0, np.sin(rotations[1])],
-                [0, 1, 0],
-                [-np.sin(rotations[1]), 0, np.cos(rotations[1])],
-            ]
-        )
-
-        yaw_mat = np.array(
-            [
-                [np.cos(rotations[2]), -np.sin(rotations[2]), 0],
-                [np.sin(rotations[2]), np.cos(rotations[2]), 0],
-                [0, 0, 1],
-            ]
-        )
-
-        points[:, :3] = np.matmul(np.matmul(np.matmul(points[:, :3], roll_mat), pitch_mat), yaw_mat)
-        return points
-
-    def random_scale_change(points, min_multiplier, max_multiplier):
-        points = points * np.random.uniform(min_multiplier, max_multiplier)
-        return points
-
-    def random_point_removal(x, y, min_sample_points):
-        indices = np.arange(np.shape(x)[0])
-        np.random.shuffle(indices)
-        num_points_to_keep = min_sample_points + int(np.random.uniform(0, 0.95) * (np.shape(x)[0] - min_sample_points))
-        indices = indices[:num_points_to_keep]
-        return x[indices], y[indices]
-
-    def random_noise_addition(points):
-        # 50% chance per sample of adding noise.
-        random_noise_std_dev = np.random.uniform(0.01, 0.025)
-        if np.random.uniform(0, 1) >= 0.5:
-            points = points + np.random.normal(0, random_noise_std_dev, size=(np.shape(points)[0], 3))
-        return points
-
-    rotations = [np.random.uniform(-90, 90), np.random.uniform(-90, 90), np.random.uniform(-180, 180)]
-
-    x = rotate_3d(x, rotations)
-    x = random_scale_change(x, 0.8, 1.2)
-    if np.random.uniform(0, 1) >= 0.5 and x.shape[0] > min_sample_points:
-        x, y = subsample_point_cloud(x, y, np.random.uniform(0.01, 0.025), min_sample_points)
-
-    return x, y
-
-
 def subsample_point_cloud(x, y, min_spacing, min_sample_points):
     x = np.hstack((x, np.atleast_2d(y).T))
     neighbours = NearestNeighbors(n_neighbors=2, algorithm="kd_tree", metric="euclidean").fit(x[:, :3])
@@ -287,58 +212,52 @@ def subsample_point_cloud(x, y, min_spacing, min_sample_points):
     else:
         return x[:, :3], x[:, 3]
 
+
+#               ============================================================================            #
+#                                       SEMANTIC TRAINING FUNCTION                                      #
+#               ============================================================================            #
+
 def SemanticTraining(params):
 
     training_history = np.zeros((0, 5))
 
-    train_dataset = TrainingDataset(
-        root_dir=os.path.join(get_fsct_path("data"), "train/sample_dir/"),
-        device=params.device,
-        min_sample_points=params.min_points_per_box,
-        max_sample_points=params.max_points_per_box,
-        augmentation=params.perform_data_augmentation,
-    )
-    if len(train_dataset) == 0:
-        raise NoDataFound("No training samples found.")
+#                                        set up dataloaders                                              #
+#               ============================================================================             #
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=params.batch_size,
-        shuffle=True,
-        drop_last=True,
-    )
+    train_dataset = TrainingDataset(root_dir=os.path.join(get_fsct_path("data"), "train/sample_dir/"),
+                                    device=params.device,
+                                    min_sample_points=params.min_pts,
+                                    max_sample_points=params.max_pts,
+                                    augmentation=params.augment_data)
+                                    
+    train_loader = DataLoader(train_dataset,
+                              batch_size=params.batch_size,
+                              shuffle=True,
+                              drop_last=True)
 
-    if params.perform_validation_during_training==1:
-        validation_dataset = ValidationDataset(
-            root_dir=os.path.join(get_fsct_path("data"), "validation/sample_dir/"),
-            device=params.device,
-        )
+    if params.validation:
+        validation_dataset = ValidationDataset(root_dir=os.path.join(get_fsct_path("data"), "validation/sample_dir/"),
+                                               device=params.device)
 
-        if len(validation_dataset) == 0:
-            raise NoDataFound("No validation samples found.")
+        validation_loader = DataLoader(validation_dataset,
+                                       batch_size=params.batch_size,
+                                       shuffle=True,
+                                       drop_last=True)
 
-        validation_loader = DataLoader(
-            validation_dataset,
-            batch_size=params.batch_size,
-            shuffle=True,
-            drop_last=True,
-        )
+#                                        load training file                                              #
+#               ============================================================================             #
 
     model = Net(num_classes=2).to(params.device)
     if params.load_existing_model:
         print("Loading existing model...")
         try:
-            model.load_state_dict(
-                torch.load(os.path.join(get_fsct_path("model"), params.model_filename), map_location=params.device),
-                strict=False,
-            )
+            model.load_state_dict(torch.load(os.path.join(get_fsct_path("model"), params.model_filename),
+                                  map_location=params.device), strict=False)
 
         except FileNotFoundError:
             print("File not found, creating new model...")
-            torch.save(
-                model.state_dict(),
-                os.path.join(get_fsct_path("model"), params.model_filename),
-            )
+            torch.save(model.state_dict(),
+                       os.path.join(get_fsct_path("model"), params.model_filename))
 
         try:
             training_history = np.loadtxt(os.path.join(get_fsct_path("model"), "training_history.csv"))
@@ -354,15 +273,17 @@ def SemanticTraining(params):
     val_epoch_loss = 0
     val_epoch_acc = 0
     
+#                                       train semantic model                                             #
+#               ============================================================================             #
+    
     for epoch in range(params.num_epochs):
         print("=====================================================================")
         print("EPOCH ", epoch)
-        # TRAINING
+
         model.train()
         running_loss = 0.0
         running_acc = 0
         i = 0
-        running_point_cloud_vis = np.zeros((0, 5))
         for data in train_loader:
             data.pos = data.pos.to(params.device)
             data.y = torch.unsqueeze(data.y, 0).to(params.device)
@@ -376,36 +297,21 @@ def SemanticTraining(params):
             _, preds = torch.max(outputs, 1)
             running_loss += loss.detach().item()
             running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
-            running_point_cloud_vis = np.vstack(
-                (
-                    running_point_cloud_vis,
-                    np.hstack((data.pos.cpu() + np.array([i * 7, 0, 0]), data.y.cpu().T, preds.cpu().T)),
-                )
-            )
-            if i % 20 == 0:
-                print(
-                    "Train sample accuracy: ",
-                    np.around(running_acc / (i + 1), 4),
-                    ", Loss: ",
-                    np.around(running_loss / (i + 1), 4),
-                )
 
-                if params.generate_point_cloud_vis:
-                    save_file(
-                        os.path.join(get_fsct_path("data"), "latest_prediction.las"),
-                        running_point_cloud_vis,
-                        headers_of_interest=["x", "y", "z", "label", "prediction"],
-                    )
+            if i % 20 == 0:
+                print("Train sample accuracy: ",
+                      np.around(running_acc / (i + 1), 4),
+                      ", Loss: ",
+                      np.around(running_loss / (i + 1), 4)) 
             i += 1
         epoch_loss = running_loss / len(train_loader)
         epoch_acc = running_acc / len(train_loader)
         update_log(epoch, epoch_loss, epoch_acc, val_epoch_loss, val_epoch_acc)
         print("Train epoch accuracy: ", np.around(epoch_acc, 4), ", Loss: ", np.around(epoch_loss, 4), "\n")
 
-        # VALIDATION
-        print("Validation")
+        if params.validation:
+            print("Validation")
 
-        if params.perform_validation_during_training==1:
             model.eval()
             running_loss = 0.0
             running_acc = 0
@@ -421,24 +327,16 @@ def SemanticTraining(params):
                 running_loss += loss.detach().item()
                 running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
                 if i % 50 == 0:
-                    print(
-                        "Validation sample accuracy: ",
-                        np.around(running_acc / (i + 1), 4),
-                        ", Loss: ",
-                        np.around(running_loss / (i + 1), 4),
-                    )
-
+                    print("Validation sample accuracy: ",
+                          np.around(running_acc / (i + 1), 4),
+                          ", Loss: ",np.around(running_loss / (i + 1), 4))
                 i += 1
             val_epoch_loss = running_loss / len(validation_loader)
             val_epoch_acc = running_acc / len(validation_loader)
             update_log(epoch, epoch_loss, epoch_acc, val_epoch_loss, val_epoch_acc)
-            print(
-                "Validation epoch accuracy: ", np.around(val_epoch_acc, 4), ", Loss: ", np.around(val_epoch_loss, 4)
-            )
+            print("Validation epoch accuracy: ", np.around(val_epoch_acc, 4), ", Loss: ", np.around(val_epoch_loss, 4))
             print("=====================================================================")
-        torch.save(
-            model.state_dict(),
-            os.path.join(get_fsct_path("model"), params.model_filename),
-        )
+
+        torch.save(model.state_dict(),os.path.join(get_fsct_path("model"), params.model_filename))
 
 

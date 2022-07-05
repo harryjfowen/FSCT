@@ -21,6 +21,9 @@ from jakteristics import compute_features
 import CSF
 import open3d as o3d
 
+def string_match(string1, string2):
+    return all(any(x in y for y in string2) for x in string1)
+
 class dict2class:
 
     def __init__(self, d):
@@ -28,31 +31,54 @@ class dict2class:
             setattr(self, k, v)
 
 def get_fsct_path(location_in_fsct=""):
-    current_working_dir = os.getcwd()
-    output_path = current_working_dir[: current_working_dir.index("fsct") + 4]
+    current_wdir = os.getcwd()
+    output_path = current_wdir[: current_wdir.index("fsct") + 4]
     if len(location_in_fsct) > 0:
         output_path = os.path.join(output_path, location_in_fsct)
     return output_path.replace("\\", "/")
+
+def make_training_folders(params):
+
+    fsct_dir = params.wdir
+    dir_list = [os.path.join(fsct_dir, "data"),
+                os.path.join(fsct_dir, "data", "train"),
+                os.path.join(fsct_dir, "data", "validation"),
+                os.path.join(fsct_dir, "data", "train", "sample_dir"),
+                os.path.join(fsct_dir, "data", "validation", "sample_dir")]
+
+    i=1
+    for directory in dir_list:
+        if not os.path.isdir(directory):
+            os.makedirs(directory)
+            if i==1: print("Created directories.")
+
+        elif "sample_dir" in directory and params.clean_wdir:
+            shutil.rmtree(directory, ignore_errors=True)
+            os.makedirs(directory)
+
+        elif i==1:
+            print("Directories found.")
+        i+=1
 
 def make_folder_structure(params):
     
     if params.odir == None:
         params.odir = os.path.join(params.directory, params.filename + '_FSCT_output')
     
-    params.working_dir = os.path.join(params.odir, params.basename + '.tmp')
+    params.wdir = os.path.join(params.odir, params.basename + '.tmp')
     
     if not os.path.isdir(params.odir):
         os.makedirs(odir)
 
-    if not os.path.isdir(params.working_dir):
-        os.makedirs(params.working_dir)
+    if not os.path.isdir(params.wdir):
+        os.makedirs(params.wdir)
     else:
-        shutil.rmtree(params.working_dir, ignore_errors=True)
-        os.makedirs(params.working_dir)
+        shutil.rmtree(params.wdir, ignore_errors=True)
+        os.makedirs(params.wdir)
         
     if params.verbose:
         print('output directory:', params.odir)
-        print('scratch directory:', params.working_dir)
+        print('scratch directory:', params.wdir)
     
     return params
     
@@ -158,20 +184,13 @@ def load_file(filename, additional_headers=False, verbose=False):
 
         inFile = laspy.read(filename)
         pc = np.vstack((inFile.x, inFile.y, inFile.z))
-        #for header in additional_fields:
-        #    if header in list(inFile.point_format.dimension_names):
-        #        pc = np.vstack((pc, getattr(inFile, header)))
-        #    else:
-        #        headers.drop(header)
         pc = pd.DataFrame(data=pc, columns=['x', 'y', 'z'])
 
     elif file_extension == '.ply':
         pc = ply_io.read_ply(filename)
-        #pc = pc[headers]
         
     elif file_extension == '.pcd':
         pc = pcd_io.read_pcd(filename)
-        #pc = pc[headers]
         
     else:
         raise Exception('point cloud format not recognised' + filename)
@@ -186,10 +205,6 @@ def load_file(filename, additional_headers=False, verbose=False):
 
 
 def save_file(filename, pointcloud, additional_fields=[], verbose=False):
-
-#     if pointcloud.shape[0] == 0: 
-#         print(filename, 'is empty...')
-#     else:
     if verbose:
         print('Saving file:', filename)
         
@@ -253,10 +268,7 @@ def low_resolution_hack_mode(point_cloud, num_iterations, min_spacing, num_procs
     return point_cloud
 
 def classify_ground(params):
-    
-    """ 
-    Classify ground points using cloth simulation [returns indeces]
-    """
+
     print("Classifying ground points...")
     csf = CSF.CSF()
 
@@ -272,15 +284,13 @@ def classify_ground(params):
 
     csf.do_filtering(ground, non_ground)
 
-    ground_idx = params.pc.loc[ground].index.to_numpy()
+    tmpIDX = params.pc.loc[ground].index.to_numpy()
 
     # Filter remaining stumps
-    features = compute_features(params.pc.loc[ground].astype('double')[['x','y','z']], search_radius=0.075, feature_names=["verticality"], num_threads=1)
-    tmp_idx = np.where(features.ravel() < 0.75)
+    features = compute_features(params.pc.loc[tmpIDX].astype('double')[['x','y','z']], search_radius=0.075, feature_names=["verticality"], num_threads=params.num_procs)
+    groundIDX = tmpIDX[np.where(features.ravel() < 0.75)]
 
-    print("Finished with ground")
-    #return(params.pc.loc[ground].index.to_numpy())
-    return(ground_idx[tmp_idx])
+    return params.pc.index.isin(groundIDX)
 
 
 def make_dtm(params):
@@ -325,20 +335,17 @@ def make_dtm(params):
     
     return params
 
-# def denoising(params):
-#     #statistical dennoising
-#     pcd = o3d.geometry.PointCloud()
-#     pcd.points = o3d.utility.Vector3dVector(xyz)
-#     cl, ind = pcd.remove_statistical_outlier(nb_neighbors=20,std_ratio=2.0)
-#     xyz = numpy.asarray(cl.points)
-
 
 #################
 #
 # FILTERING MODULE 
 
-from sklearn.cluster import DBSCAN
-from sklearn.cluster import OPTICS
+def clustering(arr, max_dist, min_pts):
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(arr)
+    idx = pcd.cluster_dbscan(max_dist, min_pts, print_progress=True)
+    return np.array(idx)
+
 
 def svd_evals(arr):
     #Calculates eigenvalues form 3d array
@@ -347,71 +354,53 @@ def svd_evals(arr):
     return evals
 
 
-def cluster_filter(arr, max_dist, eval_threshold):
-    clusterer = OPTICS(max_dist,n_jobs=-1).fit(arr)
-    labels = clusterer.labels_
-    final_evals = np.zeros([labels.shape[0], 3])
+def cluster_filter(pdDF, max_dist, min_pts, eval_threshold):
+    print("This filter takes Pandas as input, returning index array")
+    print("[Note: if eval_threshold = 0, only min_pts will be used to select clusters")
+    pdIDX = pdDF.index.values
+    arr = pdDF[["x","y","z"]].values.astype('double')
+    labels = clustering(arr, max_dist, min_pts)
+    ratio = np.zeros(len(pdDF), dtype=float)
     for L in np.unique(labels):
         ids = np.where(labels == L)[0]
-        if (L != -1) & len(ids) >= 3:
+        if len(ids) >= min_pts:
             e = svd_evals(arr[ids])
-            final_evals[ids] = e
-    ratio = np.asarray([i / np.sum(i) for i in final_evals])
-    print(ratio[:, 0])
-    return ratio[:, 0] >= eval_threshold
+            ratio[ids] = (e/np.sum(e))[0]
+        else:
+            ratio[ids] = -1
+
+    return (ratio>=eval_threshold)
+
+def denoise(cloud):
+    #cloud = cloud[cloud['dev'] < 10]
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(cloud[['x', 'y', 'z']].to_numpy().astype('double'))
+    _, ind = pcd.remove_statistical_outlier(nb_neighbors=25,std_ratio=1.0)
+    denoise_idx = np.array(ind)
+    return(denoise_idx)
+
+
+def smooth_classifcation(classified_arr, raw_cloud, k):
+
+    nbrs = NearestNeighbors(leaf_size=25, n_jobs=-1).fit(classified_arr[['x', 'y', 'z']].values)
+    indices = nbrs.kneighbors(raw_cloud[['x', 'y', 'z']].values, n_neighbors=k, return_distance=False)
+
+    classes = classified_arr["label"].values.T
+    new_class = np.zeros(raw_cloud.shape[0])
+    class_ = classes[indices]
+
+    for i in range(len(indices)):
+        unique, count = np.unique(class_[i, :], return_counts=True)
+        new_class[i] = unique[np.argmax(count)]
+
+    # def _nnClass(new_class, old_class, i):
+    #     unique, count = np.unique(old_class[i, :], return_counts=True)
+    #     return(unique[np.argmax(count)])
+    # p_map(_nnClass, class_, list(range(0,len(indices))))
+
+    cloud = raw_cloud.loc[raw_cloud.index, 'label'] = new_class
+    return cloud
 
 
 
-def upscale_idx(base, arr, attr):
 
-    
-
-    assert base.shape[0] == attr.shape[0], '"base" and "attr" must have the same number of samples.'
-
-    idx = set_nbrs_knn(base, arr, 1, return_dist=False)
-    idx = idx.astype(int)
-    newattr = attr[idx]
-
-    return np.reshape(newattr, newattr.shape[0])
-
-
-def set_nbrs_knn(arr, pts, knn, return_dist=True, block_size=100000):
-
-    knn = int(knn)
-
-    nbrs = NearestNeighbors(n_neighbors=knn, metric='euclidean',
-                            algorithm='kd_tree', leaf_size=15,
-                            n_jobs=-1).fit(arr)
-
-    # Making sure block_size is limited by at most the number of points in
-    # arr.
-    if block_size > pts.shape[0]:
-        block_size = pts.shape[0]
-
-    # Creating block of ids.
-    ids = np.arange(pts.shape[0])
-    ids = np.array_split(ids, int(pts.shape[0] / block_size))
-
-    # Initializing variables to store distance and indices.
-    if return_dist is True:
-        distance = np.zeros([pts.shape[0], knn])
-    indices = np.zeros([pts.shape[0], knn])
-
-    # Checking if the function should return the distance as well or only the
-    # neighborhood indices.
-    if return_dist is True:
-        # Obtaining the neighborhood indices and their respective distances
-        # from the center point by looping over blocks of ids.
-        for i in ids:
-            nbrs_dist, nbrs_ids = nbrs.kneighbors(pts[i])
-            distance[i] = nbrs_dist
-            indices[i] = nbrs_ids
-        return distance, indices
-
-    elif return_dist is False:
-        # Obtaining the neighborhood indices only  by looping over blocks of
-        # ids.
-        for i in ids:
-            nbrs_ids = nbrs.kneighbors(pts[i], return_distance=False)
-            indices[i] = nbrs_ids
-        return indices
