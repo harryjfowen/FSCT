@@ -2,6 +2,10 @@ import numpy as np
 import random
 
 def augmentations(x, y, min_sample_points):
+    
+    '''
+    Augment data by rotating and rescaling. 
+    '''
     def rotate_3d(points, rotations):
         rotations[0] = np.radians(rotations[0])
         rotations[1] = np.radians(rotations[1])
@@ -56,7 +60,7 @@ def augmentations(x, y, min_sample_points):
 
     x = rotate_3d(x, rotations)
     x = random_scale_change(x, 0.8, 1.2)
-    if np.random.uniform(0, 1) >= 0.5 and x.shape[0] > min_sample_points:
-        x, y = subsample_point_cloud(x, y, np.random.uniform(0.01, 0.025), min_sample_points)
+    #if np.random.uniform(0, 1) >= 0.5 and x.shape[0] > min_sample_points:
+        #x, y = subsample_point_cloud(x, y, np.random.uniform(0.01, 0.025), min_sample_points)
 
     return x, y

@@ -4,7 +4,7 @@ import numpy as np
 import random
 import glob
 from sklearn.neighbors import NearestNeighbors
-from data_augmentation import augmentations
+from augmentation import augmentations
 
 class TrainingDataset(Dataset):
     def __init__(self, root_dir, device, min_sample_points, max_sample_points, augmentation):

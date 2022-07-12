@@ -1,5 +1,7 @@
-from tools import load_file, save_file, get_fsct_path
-from model import Net
+from src.tools import load_file, save_file, get_fsct_path
+from src.augmentation import augmentations
+from src.model import Net
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,13 +12,16 @@ import random
 import threading
 import os
 import shutil
-from data_augmentation import augmentations
 from jakteristics import compute_features
 from sklearn import preprocessing
 from sklearn.neighbors import NearestNeighbors
 from abc import ABC
 
 class TrainingDataset(Dataset, ABC):
+    
+    '''
+    Create training dataset function for torch data loader. 
+    '''
     def __init__(self, root_dir, device, min_pts, max_pts, augmentation):
         super().__init__()
         self.filenames = glob.glob(root_dir + "*.npy")
@@ -50,6 +55,10 @@ class TrainingDataset(Dataset, ABC):
 
 
 class ValidationDataset(Dataset, ABC):
+
+    '''
+    Create validation dataset function for torch data loader. 
+    '''
     def __init__(self, root_dir, device):
         super().__init__()
         self.filenames = glob.glob(root_dir + "*.npy")
@@ -74,50 +83,52 @@ class ValidationDataset(Dataset, ABC):
             data = Data(pos=x, x=None, y=y)
             return data
 
-
+def update_log(training_history, epoch, epoch_loss, epoch_acc, val_epoch_loss, val_epoch_acc):
+        try:
+            np.savetxt(os.path.join(get_fsct_path("model"), "training_history.csv"), training_history)
+        except PermissionError:
+            print("training_history not saved this epoch, please close training_history.csv to enable saving.")
+            try:
+                np.savetxt(
+                    os.path.join(get_fsct_path("model"), "training_history_permission_error_backup.csv"),
+                    training_history,
+                )
+            except PermissionError:
+                pass
+            
 #                                       SEMANTIC TRAINING FUNCTION                                      #
 #               ============================================================================            #
 
 def SemanticTraining(params):
-    
-    # check status of GPU
-    params.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if params.verbose: print('\nUsing:', params.device)
-
-#                                        set up dataloaders                                              #
-    
-    training_history = np.zeros((0, 5))
+     
+    '''
+    Setup data loaders. 
+    '''
 
     train_dataset = TrainingDataset(root_dir=os.path.join(params.wdir, "data", "train/sample_dir/"),
-                                    device=params.device,
-                                    min_pts=params.min_pts,
-                                    max_pts=params.max_pts,
-                                    augmentation=params.augmentation)
+                                    device=params.device, min_pts=params.min_pts,
+                                    max_pts=params.max_pts, augmentation=params.augmentation)
                                     
-    train_loader = DataLoader(train_dataset,
-                              batch_size=params.batch_size,
-                              shuffle=True,
-                              drop_last=True)
+    train_loader = DataLoader(train_dataset, batch_size=params.batch_size,
+                              shuffle=True, drop_last=True)
 
     if params.validation:
-        validation_dataset = ValidationDataset(root_dir=os.path.join(get_fsct_path("data"), "validation/sample_dir/"),
+        validation_dataset = ValidationDataset(root_dir=os.path.join(get_fsct_path("data"),
+                                               "validation/sample_dir/"),
                                                device=params.device)
 
         validation_loader = DataLoader(validation_dataset,
                                        batch_size=params.batch_size,
-                                       shuffle=True,
-                                       drop_last=True)
+                                       shuffle=True, drop_last=True)
 
-
-#                                        load training file                                              #
 
     model = Net(num_classes=2).to(params.device)
     
-    model_filepath = os.path.join(params.wdir,'model',params.model_name)
-    if os.path.isdir(model_filepath):
-        print("Loading existing model...")
+    params.model_filepath = os.path.join(params.wdir,'model',params.model)
+    if os.path.isfile(params.model_filepath):
+        print("\nLoading ", params.model_filepath)
         
-        model.load_state_dict(torch.load(model_filepath,
+        model.load_state_dict(torch.load(params.model_filepath,
                               map_location=params.device),
                               strict=False)
         try:
@@ -126,8 +137,8 @@ def SemanticTraining(params):
         except OSError:
             pass
     else:
-        print("File not found, creating new model...")
-        torch.save(model.state_dict(),model_filepath)
+        print("\nModel not found, creating new file...")
+        torch.save(model.state_dict(),params.model_filepath)
 
     model = model.to(params.device)
 
@@ -136,10 +147,15 @@ def SemanticTraining(params):
     val_epoch_loss = 0
     val_epoch_acc = 0
     
-#                                       train semantic model                                             #
-    
+
+    '''
+    Train model. 
+    '''
+    params.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if params.verbose: print('Using:', params.device)
+
     for epoch in range(params.num_epochs):
-        print("\n=====================================================================")
+        print("=====================================================================")
         print("EPOCH ", epoch)
 
         model.train()
@@ -166,9 +182,15 @@ def SemanticTraining(params):
                       ", Loss: ",
                       np.around(running_loss / (i + 1), 4)) 
             i += 1
+        
         epoch_loss = running_loss / len(train_loader)
         epoch_acc = running_acc / len(train_loader)
-        update_log(epoch, epoch_loss, epoch_acc, val_epoch_loss, val_epoch_acc)
+        if params.validation == False:
+            val_epoch_loss = 0
+            val_epoch_acc = 0	
+        
+        epoch_results = np.array([[epoch, epoch_loss, epoch_acc, val_epoch_loss, val_epoch_acc]])
+        update_log(np.vstack((training_history,epoch_results)), epoch, epoch_loss, epoch_acc, val_epoch_loss, val_epoch_acc)
         print("Train epoch accuracy: ", np.around(epoch_acc, 4), ", Loss: ", np.around(epoch_loss, 4), "\n")
 
         if params.validation:
@@ -195,8 +217,8 @@ def SemanticTraining(params):
                 i += 1
             val_epoch_loss = running_loss / len(validation_loader)
             val_epoch_acc = running_acc / len(validation_loader)
-            update_log(epoch, epoch_loss, epoch_acc, val_epoch_loss, val_epoch_acc)
+            update_log(training_history, epoch, epoch_loss, epoch_acc, val_epoch_loss, val_epoch_acc)
             print("Validation epoch accuracy: ", np.around(val_epoch_acc, 4), ", Loss: ", np.around(val_epoch_loss, 4))
             print("=====================================================================")
 
-        torch.save(model.state_dict(),os.path.join(get_fsct_path("model"), params.model_filename))
+        torch.save(model.state_dict(),params.model_filepath)

@@ -4,16 +4,16 @@ import argparse
 import pickle
 
 # from fsct.run_tools import FSCT
-from other_parameters import other_parameters
-from tools import dict2class
-from preprocessing import Preprocessing
-from inference import SemanticSegmentation
-from segmentation import Segmentation
+from src.predict_params import other_parameters
+from src.tools import dict2class
+from src.preprocessing import Preprocessing
+from src.predicter import SemanticSegmentation
 
 if __name__ == '__main__':
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--point-cloud', '-p', default='', type=str, help='path to point cloud')
+    parser.add_argument('--point_spacing', type=float, default=0.01, help="Downsampling resolution [set to 0 if no downsampling")
     parser.add_argument('--params', type=str, default='', help='path to pickled parameter file')
     parser.add_argument('--odir', type=str, default='.', help='output directory')
 
@@ -29,7 +29,9 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', default=10, type=int, help="If you get CUDA errors, try lowering this.")
     parser.add_argument('--num_procs', default=10, type=int, help="Number of CPU cores you want to use. If you run out of RAM, lower this.")
 
-    parser.add_argument('--keep-npy', action='store_true', help="Keeps .npy files used for segmentation after inference is finished.")
+    parser.add_argument('--model', type=str, default='model.pth', help='path to candidate model')
+
+    parser.add_argument('--keep_npy', action='store_true', help="Keeps .npy files used for segmentation after inference is finished.")
                            
     parser.add_argument('--output_fmt', default='ply', help="file type of output")
     parser.add_argument('--verbose', action='store_true', help="print stuff")
@@ -51,7 +53,10 @@ if __name__ == '__main__':
             raise Exception(f'buffer > 0 but no tile index at {params.tile_index}')
     
     ### end sanity checks ###
-   
+
+    #Determine whether training or predicting
+    params.mode = os.path.splitext(os.path.basename(__file__))[0]
+
     if os.path.isfile(params.params):
         p_space = pickle.load(open(params.params, 'rb'))
         for k, v in p_space.__dict__.items():
@@ -91,7 +96,3 @@ if __name__ == '__main__':
         params.steps_completed[1] = True
         pickle.dump(params, open(os.path.join(params.odir, f'{params.basename}.params.pickle'), 'wb'))
 
-#    if params.step >= 2 and not params.steps_completed[2]:
-#        params = Segmentation(params)
-#        params.steps_completed[3] = True
-#        pickle.dump(params, open(os.path.join(params.odir, f'{params.basename}.params.pickle'), 'wb'))

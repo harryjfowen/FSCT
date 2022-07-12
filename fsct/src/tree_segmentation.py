@@ -11,8 +11,8 @@ from sklearn.cluster import DBSCAN
 from scipy.spatial import ConvexHull
 import networkx as nx
 
-from tools import *
-from fit_cylinders import RANSAC_helper
+from src.tools import *
+from src.fit_cylinders import RANSAC_helper
 
 pd.options.mode.chained_assignment = None
 

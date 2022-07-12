@@ -15,8 +15,7 @@ from scipy import spatial
 import string
 import struct
 from scipy import ndimage
-
-import ply_io, pcd_io
+from src import ply_io, pcd_io
 from jakteristics import compute_features
 import CSF
 import open3d as o3d
@@ -37,49 +36,53 @@ def get_fsct_path(location_in_fsct=""):
         output_path = os.path.join(output_path, location_in_fsct)
     return output_path.replace("\\", "/")
 
-def make_training_folders(params):
-
-    fsct_dir = params.wdir
-    dir_list = [os.path.join(fsct_dir, "data"),
-                os.path.join(fsct_dir, "data", "train"),
-                os.path.join(fsct_dir, "data", "validation"),
-                os.path.join(fsct_dir, "data", "train", "sample_dir"),
-                os.path.join(fsct_dir, "data", "validation", "sample_dir")]
-
-    i=1
-    for directory in dir_list:
-        if not os.path.isdir(directory):
-            os.makedirs(directory)
-            if i==1: print("Created directories.")
-
-        elif "sample_dir" in directory and params.clean_wdir:
-            shutil.rmtree(directory, ignore_errors=True)
-            os.makedirs(directory)
-
-        elif i==1:
-            print("Directories found.")
-        i+=1
-
 def make_folder_structure(params):
-    
-    if params.odir == None:
-        params.odir = os.path.join(params.directory, params.filename + '_FSCT_output')
-    
-    params.wdir = os.path.join(params.odir, params.basename + '.tmp')
-    
-    if not os.path.isdir(params.odir):
-        os.makedirs(odir)
 
-    if not os.path.isdir(params.wdir):
-        os.makedirs(params.wdir)
-    else:
-        shutil.rmtree(params.wdir, ignore_errors=True)
-        os.makedirs(params.wdir)
-        
-    if params.verbose:
-        print('output directory:', params.odir)
-        print('scratch directory:', params.wdir)
+    if params.mode == 'train':
     
+        fsct_dir = params.wdir
+        dir_list = [os.path.join(fsct_dir, "data"),
+                    os.path.join(fsct_dir, "data", "train"),
+                    os.path.join(fsct_dir, "data", "validation"),
+                    os.path.join(fsct_dir, "data", "train", "sample_dir"),
+                    os.path.join(fsct_dir, "data", "validation", "sample_dir")]
+
+        i=1
+        for directory in dir_list:
+            if not os.path.isdir(directory):
+                os.makedirs(directory)
+                if i==1: print("Created directories.")
+
+            elif "sample_dir" in directory and params.clean_wdir:
+                shutil.rmtree(directory, ignore_errors=True)
+                os.makedirs(directory)
+
+            elif i==1:
+                print("Directories found.")
+            i+=1
+
+    if params.mode == 'predict':
+        
+        params.directory, params.filename = os.path.split(params.point_cloud)
+        params.basename = os.path.splitext(params.filename)[0]
+
+        if params.odir == '.':
+            params.odir = os.path.join(params.directory, params.basename + '_LW')
+        
+        params.wdir = os.path.join(params.odir, params.basename + '.tmp')
+        if not os.path.isdir(params.odir):
+            os.makedirs(params.odir)
+
+        if not os.path.isdir(params.wdir):
+            os.makedirs(params.wdir)
+        else:
+            shutil.rmtree(params.wdir, ignore_errors=True)
+            os.makedirs(params.wdir)
+            
+        if params.verbose:
+            print('output directory:', params.odir)
+            print('scratch directory:', params.wdir)
+        
     return params
     
 def voxelise(tmp, length, method='random', z=True):
@@ -348,34 +351,35 @@ def clustering(arr, max_dist, min_pts):
 
 
 def svd_evals(arr):
-    #Calculates eigenvalues form 3d array
     centroid = np.average(arr, axis=0)
     _, evals, evecs = np.linalg.svd(arr - centroid, full_matrices=False)
     return evals
 
 
-def cluster_filter(pdDF, max_dist, min_pts, eval_threshold):
+def cluster_filter(pdDF, max_dist, min_pts, eval_threshold, mode):
     print("This filter takes Pandas as input, returning index array")
-    print("[Note: if eval_threshold = 0, only min_pts will be used to select clusters")
+    noise_class = 0
     pdIDX = pdDF.index.values
     arr = pdDF[["x","y","z"]].values.astype('double')
     labels = clustering(arr, max_dist, min_pts)
     ratio = np.zeros(len(pdDF), dtype=float)
     for L in np.unique(labels):
         ids = np.where(labels == L)[0]
-        if len(ids) >= min_pts:
+        if len(ids) >= min_pts and L != -1:
             e = svd_evals(arr[ids])
             ratio[ids] = (e/np.sum(e))[0]
         else:
-            ratio[ids] = -1
+            ratio[ids] = noise_class #eval_threshold# keep all points classified as noise
+    if mode == 'wood':
+        return (ratio>=eval_threshold)
+    if mode == 'leaf':
+        return (ratio<eval_threshold)
+    
 
-    return (ratio>=eval_threshold)
-
-def denoise(cloud):
-    #cloud = cloud[cloud['dev'] < 10]
+def denoise(cloud, knn, std):
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(cloud[['x', 'y', 'z']].to_numpy().astype('double'))
-    _, ind = pcd.remove_statistical_outlier(nb_neighbors=25,std_ratio=1.0)
+    _, ind = pcd.remove_statistical_outlier(nb_neighbors=knn,std_ratio=std)
     denoise_idx = np.array(ind)
     return(denoise_idx)
 
@@ -400,7 +404,4 @@ def smooth_classifcation(classified_arr, raw_cloud, k):
 
     cloud = raw_cloud.loc[raw_cloud.index, 'label'] = new_class
     return cloud
-
-
-
 
