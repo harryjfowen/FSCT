@@ -7,7 +7,7 @@ import pandas as pd
 import os
 import shutil
 from sklearn.cluster import DBSCAN
-from sklearn.cluster import OPTICS
+from sklearn.cluster import Birch
 from scipy.interpolate import griddata
 from copy import deepcopy
 from multiprocessing import get_context
@@ -19,6 +19,7 @@ from src import ply_io, pcd_io
 from jakteristics import compute_features
 import CSF
 import open3d as o3d
+from pykdtree.kdtree import KDTree
 
 def string_match(string1, string2):
     return all(any(x in y for y in string2) for x in string1)
@@ -187,7 +188,7 @@ def load_file(filename, additional_headers=False, verbose=False):
 
         inFile = laspy.read(filename)
         pc = np.vstack((inFile.x, inFile.y, inFile.z))
-        pc = pd.DataFrame(data=pc, columns=['x', 'y', 'z'])
+        pc = pd.DataFrame(data=pc.T, columns=['x', 'y', 'z'])
 
     elif file_extension == '.ply':
         pc = ply_io.read_ply(filename)
@@ -344,9 +345,8 @@ def make_dtm(params):
 # FILTERING MODULE 
 
 def clustering(arr, max_dist, min_pts):
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(arr)
-    idx = pcd.cluster_dbscan(max_dist, min_pts, print_progress=True)
+    clusterer = sklearn.cluster.Birch(threshold = max_dist)
+    idx = clusterer.fit_predict(arr)
     return np.array(idx)
 
 
@@ -384,10 +384,9 @@ def denoise(cloud, knn, std):
     return(denoise_idx)
 
 
-def smooth_classifcation(classified_arr, raw_cloud, k):
-
-    nbrs = NearestNeighbors(leaf_size=25, n_jobs=-1).fit(classified_arr[['x', 'y', 'z']].values)
-    indices = nbrs.kneighbors(raw_cloud[['x', 'y', 'z']].values, n_neighbors=k, return_distance=False)
+def smooth_classifcation(classified_arr, raw_cloud, knn):
+    nbrs = KDTree(cloud[['x', 'y', 'z']].values)
+    _, indices = nbrs.query(cloud[['x', 'y', 'z']], k=knn)
 
     classes = classified_arr["label"].values.T
     new_class = np.zeros(raw_cloud.shape[0])
@@ -397,11 +396,10 @@ def smooth_classifcation(classified_arr, raw_cloud, k):
         unique, count = np.unique(class_[i, :], return_counts=True)
         new_class[i] = unique[np.argmax(count)]
 
-    # def _nnClass(new_class, old_class, i):
-    #     unique, count = np.unique(old_class[i, :], return_counts=True)
-    #     return(unique[np.argmax(count)])
-    # p_map(_nnClass, class_, list(range(0,len(indices))))
-
     cloud = raw_cloud.loc[raw_cloud.index, 'label'] = new_class
     return cloud
 
+def nn_dist(cloud,knn):
+    kd_tree = KDTree(cloud[['x', 'y', 'z']].values)
+    dist, _ = kd_tree.query(cloud[['x', 'y', 'z']].values, k=knn)
+    return np.mean(dist[:, 1:]) + (np.std(dist[:, 1:]))

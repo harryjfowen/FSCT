@@ -1,0 +1,11 @@
+1. Introduce scaled boxes so that boxes of data vary in size, i.e. small boxes where high detail is necessary (branches and crown edges) and large boxes on easy objects such as stems. Hopefully this will lessen the computational burder of going small all over. Need to think of measures that will determine the scale of boxes. Boxes shoudl start at max then get split small if certain conditions are met?
+1.1 Would taller but narrower boxes make easier?? 
+
+2. Write a point features script that includes 3 salient or tensor pca feature spaces from vicari  et al., 2019 - use the fast kd tree to compute 
+2.1 These features could help determine box size scaling, feed biased downsampling if reflectance not available or...
+2.2 Directly feed into the network as additional information to XYZ [see morrel et al., 2020] - will these help smaller branches? would focus on small KNN of features to make sure extra detail is there. 
+[!!	USE CUPY [GPU NUMPY] TO COMPOUTE THE EIGEN VALUES [cupy.linalg.svd] NECESSARY FOR THIS STEP !!]
+
+3. Fix bug where preprocessing doesn't engage if validation is switched on but sample_dir is empty
+
+ 

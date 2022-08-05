@@ -112,6 +112,11 @@ def SemanticSegmentation(params):
     probs = pd.DataFrame(index=params.pc.index, data=labels[:, :2], columns=['pWood','pLeaf'])
     params.pc = params.pc.join(probs)
 
+    # attribute points as wood if any points have
+    # a wood probability > params.is_wood (Morel et al. 2020)
+    is_wood = np.any(classified_pc[indices][:, :, -1] > params.is_wood, axis=1)
+    params.pc.loc[is_wood, 'label'] = 1
+
     ##Add ground labels from prior CSF classifcation
     print("adding ground labels")
     params.pc.loc[params.pc.index[params.ground], 'label'] = params.terrain_class

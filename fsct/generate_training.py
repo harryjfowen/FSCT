@@ -30,7 +30,7 @@ idx = pc.index.values
 
 # filter based on reflectance 
 #cutoff = scipy.stats.mode(pc['refl'].values, axis=0)
-boolRfl = (pc['refl'] <= -6)
+boolRfl = (pc['scalar_refl'] <= -6)
 
 #	Extract features on canopy points with reflectance below a threshold (i.e. leaf points)
 featuresFine = compute_features(pc[['x', 'y', 'z']][boolRfl].to_numpy().astype('double'),
@@ -39,24 +39,23 @@ featuresFine = compute_features(pc[['x', 'y', 'z']][boolRfl].to_numpy().astype('
 
 boolFine = (featuresFine[:, 0] < 0.75) & (featuresFine[:, 1] < 0.75)
 
-# clean up wood file 
-woodIDX = idx[~boolRfl]
-
-woodIDX = woodIDX[denoise(pc.loc[woodIDX],10,1.0)]
-woodIDX = woodIDX[cluster_filter(pc.loc[woodIDX], 0.05, 10, 0.66, 'wood')]
 
 # Filter values of leaf points that still resemble wood points
 leafIDX = idx[boolRfl][boolFine]
-
-##2nd Pass but at a coarser scale. Now only leaf points should remain
 featuresCoarse = compute_features(pc[['x', 'y', 'z']].loc[leafIDX].to_numpy().astype('double'),
 								  search_radius=0.20, feature_names=["linearity","verticality"], 
 								  num_threads=30)
 
 boolCoarse = (featuresCoarse[:, 0] < 0.80) & (featuresCoarse[:, 1] < 0.80)
 
+woodIDX = idx[~boolRfl]
+woodIDX = woodIDX[denoise(pc.loc[woodIDX],10,1.0)]
+opt_nn = nn_dist(pc.loc[woodIDX],16)
+woodIDX = woodIDX[cluster_filter(pc.loc[woodIDX], opt_nn, 10, 0.66, 'wood')]
+
 leafIDX = leafIDX[boolCoarse]
-leafIDX = leafIDX[cluster_filter(pc.loc[leafIDX], 0.05, 10, 0.66, 'leaf')]
+opt_nn = nn_dist(pc.loc[leafIDX],16)
+leafIDX = leafIDX[cluster_filter(pc.loc[leafIDX], opt_nn, 10, 0.66, 'leaf')]
 
 # add label column
 pc.loc[leafIDX, 'label'] = int(2)
@@ -68,5 +67,7 @@ pc = pc.dropna()
 #pcRAW['label'] = labels
 
 # write out cloud with labels 
+pc = pc[["x","y","z","scalar_refl","label"]]
+pc.columns = ['x','y','z','refl','label']
 save_file(os.path.join(os.path.dirname(filepath), os.path.basename(os.path.splitext(filepath)[0]) + '_LW.ply'),
 					   pc[["x","y","z","refl","label"]], ['refl','label'], verbose = True)

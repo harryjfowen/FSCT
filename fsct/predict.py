@@ -30,6 +30,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_procs', default=10, type=int, help="Number of CPU cores you want to use. If you run out of RAM, lower this.")
 
     parser.add_argument('--model', type=str, default='model.pth', help='path to candidate model')
+    parser.add_argument('--is-wood', default=0.90, type=float, help='a probability above which points are classified as wood')
 
     parser.add_argument('--keep_npy', action='store_true', help="Keeps .npy files used for segmentation after inference is finished.")
                            
