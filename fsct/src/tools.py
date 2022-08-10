@@ -270,13 +270,16 @@ def low_resolution_hack_mode(point_cloud, num_iterations, min_spacing, num_procs
     print('Hacked point cloud shape:', point_cloud.shape)
     return point_cloud
 
+#need to find out how to remove inf values from nbrs query!!
 def verticality(arr, knn, r):
     ids = np.arange(arr.shape[0])
     nbrs = KDTree(arr)
-    _, nbrs_idx = nbrs.query(arr, k=knn, distance_upper_bound = r)
+    dist, nbrs_idx = nbrs.query(arr, k=knn, distance_upper_bound = r)
     V = np.zeros([arr.shape[0], 1], dtype=float)
     for i in ids:
-       V[i] = (np.max(arr[nbrs_idx[i]][:, 2])-np.min(arr[nbrs_idx[i]][:, 2]))
+        vec = arr[nbrs_idx[i]][:, 2]
+        vec = vec[~np.isnan(vec)]
+        V[i] = (np.max(vec)-np.min(vec))
     V = V/np.percentile(V,99)
     V[np.isnan(V)] = 0
     return V
@@ -301,8 +304,8 @@ def classify_ground(params):
     tmpIDX = params.pc.loc[ground].index.to_numpy()
 
     # Filter remaining stumps    
-    V = verticality(params.pc.loc[tmpIDX][['x','y','z']].values)
-    groundIDX = tmpIDX[np.where(V < 0.75)]
+    V = verticality(params.pc.loc[tmpIDX][['x','y','z']].to_numpy(), 50, 1000)
+    groundIDX = tmpIDX[np.where(V.flatten() < 0.75)]
 
     return params.pc.index.isin(groundIDX)
 
