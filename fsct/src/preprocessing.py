@@ -7,8 +7,6 @@ import pandas as pd
 from sklearn.neighbors import NearestNeighbors
 from sklearn import preprocessing
 from tqdm import tqdm
-from jakteristics import compute_features
-
 from src.tools import *
 
 def save_pts(params, I, bx, by, bz):

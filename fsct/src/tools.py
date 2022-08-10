@@ -16,7 +16,6 @@ import string
 import struct
 from scipy import ndimage
 from src import ply_io, pcd_io
-from jakteristics import compute_features
 import CSF
 import open3d as o3d
 from pykdtree.kdtree import KDTree
@@ -271,6 +270,17 @@ def low_resolution_hack_mode(point_cloud, num_iterations, min_spacing, num_procs
     print('Hacked point cloud shape:', point_cloud.shape)
     return point_cloud
 
+def verticality(arr, knn, r):
+    ids = np.arange(arr.shape[0])
+    nbrs = KDTree(arr)
+    _, nbrs_idx = nbrs.query(arr, k=knn, distance_upper_bound = r)
+    V = np.zeros([arr.shape[0], 1], dtype=float)
+    for i in ids:
+       V[i] = (np.max(arr[nbrs_idx[i]][:, 2])-np.min(arr[nbrs_idx[i]][:, 2]))
+    V = V/np.percentile(V,99)
+    V[np.isnan(V)] = 0
+    return V
+
 def classify_ground(params):
 
     print("Classifying ground points...")
@@ -290,9 +300,9 @@ def classify_ground(params):
 
     tmpIDX = params.pc.loc[ground].index.to_numpy()
 
-    # Filter remaining stumps
-    features = compute_features(params.pc.loc[tmpIDX].astype('double')[['x','y','z']], search_radius=0.075, feature_names=["verticality"], num_threads=params.num_procs)
-    groundIDX = tmpIDX[np.where(features.ravel() < 0.75)]
+    # Filter remaining stumps    
+    V = verticality(params.pc.loc[tmpIDX][['x','y','z']].values)
+    groundIDX = tmpIDX[np.where(V < 0.75)]
 
     return params.pc.index.isin(groundIDX)
 
