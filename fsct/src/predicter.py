@@ -97,32 +97,35 @@ def SemanticSegmentation(params):
     del outputb, out, batches, pos, output  
 
     if params.verbose: print("Choosing most confident labels...")
-    neighbours = NearestNeighbors(n_neighbors=9, 
+
+    #Build KD tree neighbourhoods to both project results onto original cloud (before downsampling) and smooth out classifcation results
+    neighbours = NearestNeighbors(n_neighbors=16, 
                                   algorithm='kd_tree', 
                                   metric='euclidean', 
-                                  radius=0.03).fit(classified_pc[:, :3])
+                                  radius=0.025).fit(classified_pc[:, :3])
     _, indices = neighbours.kneighbors(params.pc[['x', 'y', 'z']].values)
 
     params.pc = params.pc.drop(columns=[c for c in params.pc.columns if c in ['label', 'pWood', 'pLeaf']])
 
+    #Calculate summary labels and probabilities within KD tree neighbourhoods
     labels = np.zeros((params.pc.shape[0], 2))
     labels[:, :2] = np.median(classified_pc[indices][:, :, -2:], axis=1)
     params.pc.loc[params.pc.index, 'label'] = np.argmax(labels[:, :2], axis=1)
 
+    #Collect probabilites from classification both classes
     probs = pd.DataFrame(index=params.pc.index, data=labels[:, :2], columns=['pWood','pLeaf'])
     params.pc = params.pc.join(probs)
 
     # attribute points as wood if any points have
     # a wood probability > params.is_wood (Morel et al. 2020)
-    is_wood = np.any(classified_pc[indices][:, :, -1] > params.is_wood, axis=1)
-    params.pc.loc[is_wood, 'label'] = 1
+    is_wood = np.any(classified_pc[indices][:, :, -2] > params.is_wood, axis=1)
+    params.pc.loc[is_wood, 'label'] = params.wood_class
 
-    ##Add ground labels from prior CSF classifcation
-    print("adding ground labels")
-    params.pc.loc[params.pc.index[params.ground], 'label'] = params.terrain_class
-    params.pc.loc[params.pc.index[params.ground], ['pWood','pLeaf']] = 0
+    ##Add ground points and labeling from prior CSF classifcation
+    params.grd.loc[:, 'label'] = params.terrain_class
+    params.grd.loc[:, ['pWood','pLeaf']] = 0
+    params.pc = params.pc.append(params.grd, ignore_index=True)
     
-    print('finished...')
     #Shift cloud back to where it was
     params.pc[['x', 'y', 'z']] += params.global_shift
 

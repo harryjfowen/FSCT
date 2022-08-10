@@ -38,7 +38,7 @@ class TrainingDataset(Dataset, ABC):
         point_cloud = np.load(self.filenames[index])
 
         x = point_cloud[:, :3]
-        y = point_cloud[:, self.label_index] - 1
+        y = point_cloud[:, self.label_index]#-1 #
         
         if self.augmentation:
             x, y = augmentations(x, y, self.min_pts)
@@ -72,7 +72,7 @@ class ValidationDataset(Dataset, ABC):
         with torch.no_grad():
             point_cloud = np.load(self.filenames[index])
             x = point_cloud[:, :3]
-            y = point_cloud[:, self.label_index] - 1
+            y = point_cloud[:, self.label_index]# - 1
             x = torch.from_numpy(x.copy()).type(torch.float).to(self.device)
             y = torch.from_numpy(y.copy()).type(torch.long).to(self.device)
 

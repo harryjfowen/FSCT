@@ -332,7 +332,7 @@ def make_dtm(params):
         size += 2
 
     ground_arr[['xx', 'yy', 'ZZ']].to_csv(os.path.join(params.odir, f'{params.basename}.dem.csv'), index=False)
-
+    
     # apply to all points   
     MAP = ground_arr.set_index('VX').ZZ.to_dict()
     params.pc.loc[:, 'n_z'] = params.pc.z - params.pc.VX.map(MAP)  

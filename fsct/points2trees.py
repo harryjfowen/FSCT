@@ -8,6 +8,7 @@ from tqdm.auto import tqdm
 
 from sklearn.neighbors import NearestNeighbors
 from sklearn.cluster import DBSCAN
+from sklearn.cluster import Birch
 from scipy.spatial import ConvexHull
 import networkx as nx
 
@@ -97,6 +98,7 @@ if __name__ == '__main__':
     parser.add_argument('--add-leaves-voxel-length', default=.5, type=float, help='voxel sixe when add leaves')
     parser.add_argument('--add-leaves-edge-length', default=1, type=float, 
                         help='maximum distance used to connect points in leaf graph')
+    parser.add_argument('--save-diameter-class', action='store_true', help='save into dimater class directories')
     parser.add_argument('--ignore-missing-tiles', action='store_true', help='ignore missing neighbouring tiles')
     parser.add_argument('--pandarallel', action='store_true', help='use pandarallel')
     parser.add_argument('--verbose', action='store_true', help='print something')
@@ -122,7 +124,6 @@ if __name__ == '__main__':
     params.n = int(params.fn.split('.')[0])
 
     params.pc = ply_io.read_ply(params.tile)
-    params.pc['n_z'] = params.pc['z']
     params.pc.loc[:, 'buffer'] = False
     params.pc.loc[:, 'fn'] = params.n
 
@@ -164,17 +165,25 @@ if __name__ == '__main__':
     
     # --- this can be dropeed soon --- 
     if 'nz' in params.pc.columns: params.pc.rename(columns={'nz':'n_z'}, inplace=True)
-        
+    
+    #[harry]downsample
+    params.pc = downsample(params.pc, 0.025, accurate=True, keep_points=False).reset_index()
+
     # save space
     params.pc = params.pc[[c for c in ['x', 'y', 'z', 'n_z', 'label', 'buffer', 'fn']]]
     params.pc[['x', 'y', 'z', 'n_z']] = params.pc[['x', 'y', 'z', 'n_z']].astype(np.float32)
     params.pc[['label', 'fn']] = params.pc[['label', 'fn']].astype(np.int16)
 
+    #harry temporary bodge
+    params.pc.loc[params.pc['label'] == 0, 'label'] = 3
+    params.pc.loc[params.pc['label'] == 1, 'label'] = 1
+    params.pc.loc[params.pc['label'] == 2, 'label'] = 0
+
     ### generate skeleton points
     if params.verbose: print('\n----- skeletonisation started -----')
 
     # extract stems points and slice slice
-    stem_pc = params.pc.loc[params.pc.label == 1]
+    stem_pc = params.pc.loc[params.pc.label == 3]
 
     # slice stem_pc
     stem_pc.loc[:, 'slice'] = (stem_pc.z // params.slice_thickness).astype(int) * params.slice_thickness
@@ -192,6 +201,7 @@ if __name__ == '__main__':
 
         if len(new_slice) > 200:
             dbscan = DBSCAN(eps=.1, min_samples=20).fit(new_slice[xyz])
+            #dbscan = Birch(threshold=0.05).fit(new_slice[xyz])
             new_slice.loc[:, 'clstr'] = dbscan.labels_
             new_slice.loc[new_slice.clstr > -1, 'clstr'] += label_offset
             stem_pc.loc[new_slice.index, 'clstr'] = new_slice.clstr
@@ -294,13 +304,23 @@ if __name__ == '__main__':
 
     # write out all trees
     params.base_I, I = {}, 0
-    for i, b in tqdm(enumerate(in_tile_stem_nodes), 
+    for i, b in tqdm(enumerate(dbh_cylinder.loc[in_tile_stem_nodes].sort_values('radius', ascending=False).index), 
                      total=len(in_tile_stem_nodes), 
                      desc='writing stems to file', 
                      disable=False if params.verbose else True):
-        if b == params.not_base: continue
-        ply_io.write_ply(os.path.join(params.odir, f'{params.n:03}_T{I}.leafoff.ply'), 
-                         trees.loc[trees.t_clstr == b])
+
+        if b == params.not_base: 
+            continue
+    
+        if params.save_diameter_class:
+            d_dir = f'{(dbh_cylinder.loc[b].radius * 2 // .1) / 10:.1f}'
+            if not os.path.isdir(os.path.join(params.odir, d_dir)):
+                os.makedirs(os.path.join(params.odir, d_dir))
+            ply_io.write_ply(os.path.join(params.odir, d_dir, f'{params.n:03}_T{I}.leafoff.ply'), 
+                             trees.loc[trees.t_clstr == b])  
+        else:
+            ply_io.write_ply(os.path.join(params.odir, f'{params.n:03}_T{I}.leafoff.ply'), 
+                             trees.loc[trees.t_clstr == b])
         params.base_I[b] = I
         I += 1  
 
@@ -377,7 +397,7 @@ if __name__ == '__main__':
 
         # linking indexs to stem number
         top2stem = branch_and_leaves.loc[branch_and_leaves.xlabel == 2].set_index('clstr')['stem'].to_dict()
-        leaf_paths.loc[:, 'base'] = leaf_paths.t_clstr.map(top2stem)
+        leaf_paths.loc[:, 't_clstr'] = leaf_paths.t_clstr.map(top2stem)
         #     paths.loc[:, 'stem'] = paths.stem_.map(base2i)
 
         # linking index to VX number
@@ -385,26 +405,30 @@ if __name__ == '__main__':
         leaf_paths.loc[:, 'VX'] = leaf_paths['clstr'].map(index2VX)
 
         # colour the same as stem
-        lvs = pd.merge(lvs, leaf_paths[['VX', 'base', 'distance']], on='VX', how='left')
+        lvs = pd.merge(lvs, leaf_paths[['VX', 't_clstr', 'distance']], on='VX', how='left')
 
         # and save
         for lv in tqdm(in_tile_stem_nodes):
 
             I = params.base_I[lv]
 
-            stem = ply_io.read_ply(os.path.join(params.odir, f'{params.n:03}_T{I}.leafoff.ply'))
+            wood_fn = glob.glob(os.path.join(params.odir, f'{params.n:03}_T{I}.leafoff.ply'))[0]
+            print(wood_fn)
+
+            stem = ply_io.read_ply(os.path.join(wood_fn))
             stem.loc[:, 'wood'] = 1
 
-            l2a = lvs.loc[lvs.base == lv]
-            l2a.loc[:, 'wood'] = 0
-            
-            # colour the same as stem
-            rgb = RGB.loc[RGB.t_clstr == lv][['red', 'green', 'blue']].values[0] * 1.2
-            l2a.loc[:, ['red', 'green', 'blue']] = [c if c <= 255 else 255 for c in rgb]
+            l2a = lvs.loc[lvs.t_clstr == lv]
+            if len(l2a) > 0:
+                l2a.loc[:, 'wood'] = 0
+                
+                # colour the same as stem
+                rgb = RGB.loc[RGB.t_clstr == lv][['red', 'green', 'blue']].values[0] * 1.2
+                l2a.loc[:, ['red', 'green', 'blue']] = [c if c <= 255 else 255 for c in rgb]
 
-            stem = stem.append(l2a[['x', 'y', 'z', 'label', 'red', 'green', 'blue', 'base', 'wood', 'distance']])
+                stem = stem.append(l2a[['x', 'y', 'z', 'label', 'red', 'green', 'blue', 't_clstr', 'wood', 'distance']])
 
             stem = stem.loc[~stem.duplicated()]
-            ply_io.write_ply(os.path.join(params.odir, f'{params.n:03}_T{I}.leafon.ply'), 
-                                     stem[['x', 'y', 'z', 'red', 'green', 'blue', 
-                                           'label', 'base', 'wood', 'distance']])
+            ply_io.write_ply(wood_fn.replace('leafoff', 'leafon'), 
+                             stem[['x', 'y', 'z', 'red', 'green', 'blue', 'label', 't_clstr', 'wood', 'distance']])
+            if params.verbose: print(f"leaf on saved to: {wood_fn.replace('leafoff', 'leafon')}") 

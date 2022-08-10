@@ -7,10 +7,11 @@ from tqdm import tqdm
 import cupy
 mempool = cupy.get_default_memory_pool()
 
+#df = load_file('/home/harryjfowen/Desktop/sample.ply')
+
 ##---------------------------------------------------------------------------------------------------------
 #       CuPy GPU Version
 ##---------------------------------------------------------------------------------------------------------
-
 def calc_features_gpu(e):
     # Calculating salient features.
     e1 = e[:, 2]

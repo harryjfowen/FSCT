@@ -50,17 +50,19 @@ def augmentations(x, y, min_sample_points):
         return x[indices], y[indices]
 
     def random_noise_addition(points):
-        # 50% chance per sample of adding noise.
+        # 25% chance per sample of adding noise.
         random_noise_std_dev = np.random.uniform(0.01, 0.025)
-        if np.random.uniform(0, 1) >= 0.5:
+        if np.random.uniform(0, 1) >= 0.25:
             points = points + np.random.normal(0, random_noise_std_dev, size=(np.shape(points)[0], 3))
         return points
 
     rotations = [np.random.uniform(-90, 90), np.random.uniform(-90, 90), np.random.uniform(-180, 180)]
-
     x = rotate_3d(x, rotations)
     x = random_scale_change(x, 0.8, 1.2)
-    #if np.random.uniform(0, 1) >= 0.5 and x.shape[0] > min_sample_points:
-        #x, y = subsample_point_cloud(x, y, np.random.uniform(0.01, 0.025), min_sample_points)
+    x = random_noise_addition(x)
+
+    # This already done in preprocessing to an extent - dont want to degrade data further
+    #if np.random.uniform(0, 1) >= 0.8 and x.shape[0] > min_sample_points:
+        #x, y = random_point_removal(x, y, min_sample_points)
 
     return x, y

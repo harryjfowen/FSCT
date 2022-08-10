@@ -50,18 +50,23 @@ def Preprocessing(params):
     for pc_file in params.point_cloud:
         if params.verbose: print('\n...')
 
+        #changing output directory if preprocesing for training purposes
+        if params.mode == 'train':
+            params.odir = os.path.dirname(pc_file) + '/sample_dir'
+
+        #read in ply files
         params.pc, params.headers = load_file(filename=pc_file,
                                        additional_headers=True,
                                        verbose=params.verbose)
 
-        if params.point_spacing != 0: # subsample if specified
+        if params.point_spacing != 0: 
             if params.verbose: print('downsampling to: %s m' % params.point_spacing)
             params.pc = downsample(params.pc, params.point_spacing, 
                                    accurate=False, keep_points=False)
         
         # Denoise the point cloud usign a statistical filter
         if params.mode == 'predict':
-            print("Denoising...")
+            print("Denoising using statistical outlier filter...")
             params.pc = params.pc.iloc[denoise(params.pc, 30, 3.0)]
 
         # calculate random sampling weights
@@ -82,10 +87,11 @@ def Preprocessing(params):
         params.pc.loc[:, 'pid'] = params.pc.index
 
         #Classifying ground returns using cloth simulation
-        params.ground = classify_ground(params)
-        if params.mode == 'train':
-            params.pc = params.pc[~params.ground]
-            params.odir = os.path.dirname(pc_file) + '/sample_dir'
+        params.grdidx = classify_ground(params)
+        if params.mode == 'predict':
+            params.grd = params.pc.loc[params.pc.index[params.grdidx]]
+        else:
+            params.pc = params.pc.drop(params.pc.index[params.grdidx])
 
         # generate bounding boxes
         xmin, xmax = np.floor(params.pc.x.min()), np.ceil(params.pc.x.max())
