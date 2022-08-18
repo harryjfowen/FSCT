@@ -1,125 +1,87 @@
 from pykdtree.kdtree import KDTree
-from src.tools import load_file, save_file, downsample
+from src.tools import load_file, save_file, downsample, denoise
 import numpy as np
 import torch
-import threading
-from tqdm import tqdm
 import cupy
+import pandas 
+
 mempool = cupy.get_default_memory_pool()
+pinned_mempool = cupy.get_default_pinned_memory_pool()
 
-#df = load_file('/home/harryjfowen/Desktop/sample.ply')
+#df = load_file('/home/harryowen/Desktop/tropical-large.ply')
 
 ##---------------------------------------------------------------------------------------------------------
-#       CuPy GPU Version
-##---------------------------------------------------------------------------------------------------------
+
 def calc_features_gpu(e):
-    # Calculating salient features.
-    e1 = e[:, 2]
-    e2 = e[:, 0] - e[:, 1]
-    e3 = e[:, 1] - e[:, 2]
-    # Calculating tensor features.
-    t1 = (e[:, 1] - e[:, 2]) / e[:, 0]
-    t2 = ((e[:, 0] * cupy.log(e[:, 0])) + (e[:, 1] * cupy.log(e[:, 1])) +
-          (e[:, 2] * cupy.log(e[:, 2])))
-    t3 = (e[:, 0] - e[:, 1]) / e[:, 0]
-    return cupy.vstack(([e1, e2, e3, t1, t2, t3])).T
+    # See Wan et al., 2021 [https://doi.org/10.1111/2041-210X.13715]
+    l = (e[:, 0] - e[:, 1]) / e[:, 0]
+    p = (e[:, 1] - e[:, 2]) / e[:, 0]
+    s = e[:, 2] / e[:, 0]
+    lsod = l + ((1-l) * (l - cupy.maximum(p,s)))
+    s = 1-s
+    sv = e[:, 2] / cupy.sum(e, axis=1)
+    sv = 1-(sv / cupy.amax(sv))
+    t = (e[:, 0] - e[:, 2]) / e[:, 0]
+    return cupy.vstack(([l, p, s, sv, t,lsod]))
 
+def calc_linearity_gpu(e):
+    # See Wan et al., 2021 [https://doi.org/10.1111/2041-210X.13715]
+    l = (e[:, 0] - e[:, 1]) / e[:, 0]
+    p = (e[:, 1] - e[:, 2]) / e[:, 0]
+    s = e[:, 2] / e[:, 0]
+    lsod = l + ((1-l) * (l - cupy.maximum(p,s)))
+    return cupy.vstack(([l, lsod]))
 
-def add_features_gpu(df,knn):
+##---------------------------------------------------------------------------------------------------------
+
+def add_features_gpu(df):
+    knn = [20,100,200]
     'Calculating Geometric Features using CUDA.' if torch.cuda.is_available() else 'No GPU found'
     arr = df[['x', 'y', 'z']].values
-    #1. compute neighbours using fast kd tree
-    nbrs = KDTree(arr)
-    dist, indices = nbrs.query(arr, k=knn, distance_upper_bound = 1000)
-    #remove any values which are infinite (beyond distance threshold)
-    # currently suboptimcal as deleting entire neighbourhoods rather than erroneous nbrs within!
-    #indices=indices[~np.isinf(dist).any(1)].astype(int)
-    if(array_gpu.nbytes >= torch.cuda.get_device_properties(0).total_memory):
-        print('File too big to fit into gpu memory')
-        return -1
-    array_gpu = cupy.asarray(arr[indices])
-    arr_shape = array_gpu.shape[1]
-    print('Allocating ', round(array_gpu.nbytes/1024.0**3,2), ' GB to the gpu')
-    # Calculating the covariance of the stack of arrays
-    # [see https://stackoverflow.com/questions/35756952/quickly-compute-eigenvectors-for-each-element-of-an-array-in-python]
-    diffs = array_gpu - cupy.mean(array_gpu, axis=1, keepdims = True)
-    diffs2 = cupy.copy(diffs)
-    del array_gpu; mempool.free_all_blocks() 
-    cov = cupy.einsum('ijk,ijl->ikl', diffs, diffs2)/arr_shape
-    del diffs, diffs2; mempool.free_all_blocks() 
-    # Calculating the eigenvalues using Singular Value Decomposition (svd).
-    evals = cupy.linalg.svd(cov, compute_uv=False)
-    del cov; mempool.free_all_blocks() 
-    #3. calc ratios of the eigen vectors [sum to 1]
-    features = calc_features_gpu((evals.T / cupy.sum(evals, axis=1)).T)
-    features[cupy.isnan(features)] = 0
-    del evals; mempool.free_all_blocks() 
-    #create pandas data frame 
-    output = pandas.DataFrame(cupy.asnumpy(features), columns = ['e1','e2','e3','t1','t2','t3'])
-    del features; mempool.free_all_blocks() 
-    #write out for visual inspection
-    save_file('/home/harryowen/Desktop/xyz-features.ply',pd.concat([pd.DataFrame(arr, columns=['x','y','z']),output],axis=1), additional_fields=['e1','e2','e3','t1','t2','t3'])
-    return output
+    results_knn = np.zeros([arr.shape[0], 6], dtype=float)
+    it = 0
+    for i, k in enumerate(knn):
+        available_mem = (torch.cuda.get_device_properties(0).total_memory/1024.0**3)/1.05
+        required_mem = np.ceil(arr[0].nbytes*k*arr.shape[0]/1024.0**3)*2
+        block_size = available_mem/required_mem
+        block_size = int(arr.shape[0]*block_size)
+        blocks = np.array_split(np.arange(arr.shape[0]), np.ceil(arr.shape[0] / block_size))
+        #1. compute neighbours using fast kd tree
+        nbrs = KDTree(arr)
+        dist, indices = nbrs.query(arr, k=k, distance_upper_bound = 1000)
+        indices=indices[~np.isinf(dist).any(1)].astype(int)
+        results_blocks = np.zeros([arr.shape[0], 2], dtype=float)
+        for b, _ in enumerate(blocks):
+            #2. Load data into memory
+            if len(blocks)==1:
+                array_gpu = cupy.asarray(arr[indices])
+            else: 
+                array_gpu = cupy.asarray(arr[indices[blocks[b]]])
+            #calc other features using svd
+            diffs = array_gpu - cupy.mean(array_gpu, axis=1, keepdims = True)
+            del array_gpu; mempool.free_all_blocks() 
+            cov = cupy.einsum('ijk,ijl->ikl', diffs, diffs)/k
+            del diffs; mempool.free_all_blocks() 
+            evals = cupy.linalg.svd(cov, compute_uv=False)
+            del cov; mempool.free_all_blocks() 
+            features = calc_linearity_gpu((evals.T / cupy.sum(evals, axis=1)).T).T
+            del evals; mempool.free_all_blocks() 
+            features[cupy.isnan(features)] = 0
+            # Move result from gpu to cpu
+            results_blocks[blocks[b]] = cupy.asnumpy(features)
+            del features; mempool.free_all_blocks()
+            pinned_mempool.free_all_blocks()
+        ####
+        ### 
+        results_knn[:, it:it+2] = results_blocks
+        it+=2
+        print('Finished calculating features using ', k, ' neighbours...')
+    #
+    cols = ['l20','sod20','l100','sod100','l200','sod200']
+    features = pandas.DataFrame(results_knn, columns = cols)
+    del results_knn, results_blocks
+    #
+    return features
 
-
-##---------------------------------------------------------------------------------------------------------
-#       Numpy CPU Version
-##---------------------------------------------------------------------------------------------------------
-
-
-def calc_features_cpu(e):
-    # Calculating salient features.
-    e1 = e[:, 2]
-    e2 = e[:, 0] - e[:, 1]
-    e3 = e[:, 1] - e[:, 2]
-    # Calculating tensor features.
-    t1 = (e[:, 1] - e[:, 2]) / e[:, 0]
-    t2 = ((e[:, 0] * np.log(e[:, 0])) + (e[:, 1] * np.log(e[:, 1])) +
-          (e[:, 2] * np.log(e[:, 2])))
-    t3 = (e[:, 0] - e[:, 1]) / e[:, 0]
-    return np.vstack(([e1, e2, e3, t1, t2, t3])).T
-
-def calc_ratios(arr,nbrs_idx,I):
-    diffs = arr[nbrs_idx[I]] - arr[nbrs_idx[I]].mean(1, keepdims = True)
-    cov = np.einsum('ijk,ijl->ikl', diffs, diffs)/arr[nbrs_idx[I]].shape[1]
-    tmp = np.linalg.svd(cov, compute_uv=False)
-    ratio = (tmp.T / np.sum(tmp, axis=1)).T
-    features[I] = calc_features_cpu(ratio)
-
-
-
-def add_features_numpy(arr,knn):
-    
-    block_size = 100000
-    if block_size > arr.shape[0]:
-        block_size = arr.shape[0]
-
-    #compute neighbours using fast kd tree
-    nbrs = KDTree(arr)
-    dist, nbrs_idx = nbrs.query(arr, k=knn, distance_upper_bound = 0.25)
-
-    # Creating block of ids.
-    ids = np.arange(arr.shape[0])
-    ids = np.array_split(ids, int(arr.shape[0] / block_size))
-
-    # Making sure nbr_idx has the correct data type.
-    nbrs_idx = nbrs_idx.astype(int)
-
-    features = np.zeros([arr.shape[0], 6], dtype=float)
-    threads = []
-    for i in ids:
-        threads.append(threading.Thread(target=calc_ratios, args=(arr, nbrs_idx, i)))
-
-    for x in tqdm(threads, desc='Calculating features', disable=False):
-        x.start()
-
-    for x in threads:
-        x.join()
-
-    features[np.isnan(features)] = 0
-
-    #out = pandas.concat([df,pandas.DataFrame(features, columns = ['e1','e2','e3','t1','t2','t3'])],axis=1)
-    #save_file('/home/harryowen/Desktop/features.ply', out, additional_fields = ['e1','e2','e3','t1','t2','t3'])
-
-    return pandas.DataFrame(features, columns = ['e1','e2','e3','t1','t2','t3'])
-
+#y = add_features_gpu(df)
+#save_file('/home/harryowen/Desktop/xyz-features.ply',pandas.concat([df,y],axis=1), additional_fields=cols)

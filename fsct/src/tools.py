@@ -352,43 +352,6 @@ def make_dtm(params):
     
     return params
 
-
-#################
-#
-# FILTERING MODULE 
-
-def clustering(arr, max_dist, min_pts):
-    clusterer = sklearn.cluster.Birch(threshold = max_dist)
-    idx = clusterer.fit_predict(arr)
-    return np.array(idx)
-
-
-def svd_evals(arr):
-    centroid = np.average(arr, axis=0)
-    _, evals, evecs = np.linalg.svd(arr - centroid, full_matrices=False)
-    return evals
-
-
-def cluster_filter(pdDF, max_dist, min_pts, eval_threshold, mode):
-    print("This filter takes Pandas as input, returning index array")
-    noise_class = 0
-    pdIDX = pdDF.index.values
-    arr = pdDF[["x","y","z"]].values.astype('double')
-    labels = clustering(arr, max_dist, min_pts)
-    ratio = np.zeros(len(pdDF), dtype=float)
-    for L in np.unique(labels):
-        ids = np.where(labels == L)[0]
-        if len(ids) >= min_pts and L != -1:
-            e = svd_evals(arr[ids])
-            ratio[ids] = (e/np.sum(e))[0]
-        else:
-            ratio[ids] = noise_class #eval_threshold# keep all points classified as noise
-    if mode == 'wood':
-        return (ratio>=eval_threshold)
-    if mode == 'leaf':
-        return (ratio<eval_threshold)
-    
-
 def denoise(cloud, knn, std):
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(cloud[['x', 'y', 'z']].to_numpy().astype('double'))

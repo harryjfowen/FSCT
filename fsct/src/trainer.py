@@ -12,7 +12,6 @@ import random
 import threading
 import os
 import shutil
-from jakteristics import compute_features
 from sklearn import preprocessing
 from sklearn.neighbors import NearestNeighbors
 from abc import ABC

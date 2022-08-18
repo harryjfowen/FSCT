@@ -8,4 +8,6 @@
 
 3. Fix bug where preprocessing doesn't engage if validation is switched on but sample_dir is empty
 
+4. In points2trees [instance segmentation] make a rule that increases the leaps possible between edges in graph as you climb the tree because large values lower down at the moment means small trees are atatched to the stem of big trees
+
  

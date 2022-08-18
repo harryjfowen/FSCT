@@ -65,7 +65,7 @@ def Preprocessing(params):
         # Denoise the point cloud usign a statistical filter
         if params.mode == 'predict':
             print("Denoising using statistical outlier filter...")
-            params.pc = params.pc.iloc[denoise(params.pc, 30, 3.0)]
+            params.pc = params.pc.iloc[denoise(params.pc, 100, 1.0)]
 
         # calculate random sampling weights
         try:
