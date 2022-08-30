@@ -15,6 +15,12 @@ def save_pts(params, I, bx, by, bz):
                        (params.pc.y.between(by, by + params.box_dims[1])) &
                        (params.pc.z.between(bz, bz + params.box_dims[2]))]
 
+    #DOuble size of boxes if their on edges (assuming edge boxes dont have very many points) 
+    if len(pc) < params.max_pts:
+        pc = params.pc.loc[(params.pc.x.between(bx*2, bx*2 + params.box_dims[0])) &
+                           (params.pc.y.between(by*2, by*2 + params.box_dims[1])) &
+                           (params.pc.z.between(bz*2, bz*2 + params.box_dims[2]))]
+
     if len(pc) > params.min_pts:
         if len(pc) > params.max_pts:
             pc = pc.sample(n=params.max_pts,weights=params.weights[pc.index])

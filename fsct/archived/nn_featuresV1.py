@@ -85,10 +85,10 @@ def classify(variables, n_classes):
     gmm.fit(variables)
     return gmm.predict(variables), gmm.means_, gmm.predict_proba(variables)
 
-pred = classify(output, 2)
+pred = classify(f, 3)
 #df = pandas.concat([output, pandas.DataFrame(pred[2], columns=["prob1", "prob2", "prob3"])], axis=1)
-df = pandas.concat([output, pandas.DataFrame(pred[0], columns=["label"])], axis=1)
-save_file('/home/harryowen/Desktop/xyz-features.ply',pandas.concat([pandas.DataFrame(arr, columns=['x','y','z']),df],axis=1), additional_fields=['l','p','s','sv','t','v','label'])
+out = pandas.concat([df, pandas.DataFrame(pred[0], columns=["label"])], axis=1)
+save_file('/home/harryowen/Desktop/xyz-gmm.ply',out, additional_fields=['label'])
 
 
 ##---------------------------------------------------------------------------------------------------------

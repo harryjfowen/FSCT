@@ -1,3 +1,4 @@
+from re import S
 from scipy.spatial import KDTree
 from src.tools import load_file, save_file, downsample, denoise
 import numpy as np
@@ -12,33 +13,29 @@ pinned_mempool = cupy.get_default_pinned_memory_pool()
 #df = df.iloc[denoise(df, 100, 1.0)].reser_index()
 ##---------------------------------------------------------------------------------------------------------
 
-def calc_features_gpu(e):
-    # See Wan et al., 2021 [https://doi.org/10.1111/2041-210X.13715]
-    l = (e[:, 0] - e[:, 1]) / e[:, 0]
-    p = (e[:, 1] - e[:, 2]) / e[:, 0]
-    s = e[:, 2] / e[:, 0]
-    lsod = l + ((1-l) * (l - cupy.maximum(p,s)))
-    s = 1-s
-    sv = e[:, 2] / cupy.sum(e, axis=1)
-    sv = 1-(sv / cupy.amax(sv))
-    t = (e[:, 0] - e[:, 2]) / e[:, 0]
-    return cupy.vstack(([l, p, s, sv, t,lsod]))
-
 def calc_linearity_gpu(e):
     # See Wan et al., 2021 [https://doi.org/10.1111/2041-210X.13715]
     l = (e[:, 0] - e[:, 1]) / e[:, 0]
-    p = (e[:, 1] - e[:, 2]) / e[:, 0]
-    s = e[:, 2] / e[:, 0]
-    lsod = l + ((1-l) * (l - cupy.maximum(p,s)))
-    return cupy.vstack(([l, lsod]))
+    return l
+
+def calc_sphericity_gpu(e):
+    # See Wan et al., 2021 [https://doi.org/10.1111/2041-210X.13715]
+    s = (e[:, 0] - e[:, 2]) / e[:, 0]
+    return s
+
+def calc_max_feature(e):
+    # See Wan et al., 2021 [https://doi.org/10.1111/2041-210X.13715]
+    l = (e[:, 0] - e[:, 1]) / e[:, 0]
+    a = (e[:, 0] - e[:, 2]) / e[:, 0]
+    return cupy.amax(cupy.vstack([l,a]),axis=0)
 
 ##---------------------------------------------------------------------------------------------------------
 
 def add_features_gpu(df):
-    knn = [20,100,200]
+    knn = [50,100,200,400]
     'Calculating Geometric Features using CUDA.' if torch.cuda.is_available() else 'No GPU found'
     arr = df[['x', 'y', 'z']].values
-    results_knn = np.zeros([arr.shape[0], 6], dtype=float)
+    results_knn = np.zeros([arr.shape[0], len(knn)], dtype=float)
     it = 0
     for i, k in enumerate(knn):
         available_mem = (torch.cuda.get_device_properties(0).total_memory/1024.0**3)/1.10
@@ -47,10 +44,9 @@ def add_features_gpu(df):
         block_size = int(arr.shape[0]*block_size)
         blocks = np.array_split(np.arange(arr.shape[0]), np.ceil(arr.shape[0] / block_size))
         #1. compute neighbours using fast kd tree
-        nbrs = KDTree(arr,compact_nodes=True)
+        nbrs = KDTree(arr, compact_nodes=True)
         dist, indices = nbrs.query(arr, k=k, workers=-1)
-        #indices=indices[~np.isinf(dist).any(1)].astype(int)
-        results_blocks = np.zeros([arr.shape[0], 2], dtype=float)
+        results_blocks = np.zeros([arr.shape[0]], dtype=float)
         for b, _ in enumerate(blocks):
             #2. Load data into memory
             if len(blocks)==1:
@@ -64,7 +60,7 @@ def add_features_gpu(df):
             del diffs; mempool.free_all_blocks() 
             evals = cupy.linalg.svd(cov, compute_uv=False)
             del cov; mempool.free_all_blocks() 
-            features = calc_linearity_gpu((evals.T / cupy.sum(evals, axis=1)).T).T
+            features = calc_max_feature((evals.T / cupy.sum(evals, axis=1)).T).T
             del evals; mempool.free_all_blocks() 
             features[cupy.isnan(features)] = 0
             # Move result from gpu to cpu
@@ -73,16 +69,17 @@ def add_features_gpu(df):
             pinned_mempool.free_all_blocks()
         ####
         ### 
-        results_knn[:, it:it+2] = results_blocks
-        it+=2
+        results_knn[:, it] = results_blocks
+        it+=1
         print('Finished calculating features using ', k, ' neighbours...')
     #
-    cols = ['l20','sod20','l100','sod100','l200','sod200']
+    cols = [str(s) + 'NN' for s in knn]
     features = pandas.DataFrame(results_knn, columns = cols)
     del results_knn, results_blocks
     #
     return features
 
 #y = add_features_gpu(df)
-#cols = ['l20','sod20','l100','sod100','l200','sod200']
-#save_file('/home/harryowen/Desktop/xyz-features.ply',pandas.concat([df,y],axis=1), additional_fields=cols + ['refl'])
+#cols = ['f20','f100','f200']
+#cols = ['fmax']
+#save_file('/home/harryowen/Desktop/xyz-features.ply',pandas.concat([df,x],axis=1), additional_fields=cols + ['refl'])

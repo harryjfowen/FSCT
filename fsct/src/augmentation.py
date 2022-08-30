@@ -52,7 +52,7 @@ def augmentations(x, y, min_sample_points):
     def random_noise_addition(points):
         # 25% chance per sample of adding noise.
         random_noise_std_dev = np.random.uniform(0.01, 0.025)
-        if np.random.uniform(0, 1) >= 0.25:
+        if np.random.uniform(0, 1) >= 0.10:
             points = points + np.random.normal(0, random_noise_std_dev, size=(np.shape(points)[0], 3))
         return points
 
