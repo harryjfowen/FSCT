@@ -68,8 +68,12 @@ def SemanticSegmentation(params):
     test_loader = DataLoader(test_dataset, batch_size=params.batch_size, shuffle=False,
                                      num_workers=0)
 
-    # initialise model
-    model = Net(num_classes=2).to(params.device)
+    '''
+    Initialise model
+    '''
+    #model = Net(num_classes=2).to(params.device)
+    model = nn.DataParallel(Net(num_classes=2)).to(params.device)
+
     params.model_filepath = os.path.join(get_fsct_path(),'model',params.model)
     model.load_state_dict(torch.load(params.model_filepath, map_location=params.device), strict=False)
     model.eval()

@@ -33,6 +33,7 @@ if __name__ == '__main__':
 
         params.mode = os.path.splitext(os.path.basename(__file__))[0]
 
+        #NOTE: MAYBE GET RID OF THIS AND SIMPLIFY TO A SET DIRECTORY IN ARGS?
         params.wdir = get_fsct_path()
         params.point_cloud = glob.glob(os.path.join(params.wdir + '/data/*/*.ply'))
 

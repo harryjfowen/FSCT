@@ -8,18 +8,13 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn import preprocessing
 from tqdm import tqdm
 from src.tools import *
+from src.weights import *
 
 def save_pts(params, I, bx, by, bz):
 
     pc = params.pc.loc[(params.pc.x.between(bx, bx + params.box_dims[0])) &
                        (params.pc.y.between(by, by + params.box_dims[1])) &
                        (params.pc.z.between(bz, bz + params.box_dims[2]))]
-
-    #DOuble size of boxes if their on edges (assuming edge boxes dont have very many points) 
-    if len(pc) < params.max_pts:
-        pc = params.pc.loc[(params.pc.x.between(bx*2, bx*2 + params.box_dims[0])) &
-                           (params.pc.y.between(by*2, by*2 + params.box_dims[1])) &
-                           (params.pc.z.between(bz*2, bz*2 + params.box_dims[2]))]
 
     if len(pc) > params.min_pts:
         if len(pc) > params.max_pts:
@@ -29,11 +24,11 @@ def save_pts(params, I, bx, by, bz):
             np.save(os.path.join(params.odir, f'{I:07}'), pc[['x', 'y', 'z', 'label']].values)
 
         else:
-            #np.savetxt(os.path.join(params.wdir, f'{I:07}.txt'), pc[['x', 'y', 'z']].values)
+            np.savetxt(os.path.join(params.wdir, f'{I:07}.txt'), pc[['x', 'y', 'z']].values)
             np.save(os.path.join(params.wdir, f'{I:07}'), pc[['x', 'y', 'z']].values)
 
 def Preprocessing(params):
-    
+
     if params.verbose: print('\n----- preprocessing started -----')
     start_time = time.time()
 
@@ -62,7 +57,8 @@ def Preprocessing(params):
         params.pc, params.headers = load_file(filename=pc_file,
                                        additional_headers=True,
                                        verbose=params.verbose)
-
+        
+        # dowsample point cloud
         if params.point_spacing != 0: 
             if params.verbose: print('downsampling to: %s m' % params.point_spacing)
             params.pc = downsample(params.pc, params.point_spacing, 
@@ -71,13 +67,22 @@ def Preprocessing(params):
         # Denoise the point cloud usign a statistical filter
         if params.mode == 'predict':
             print("Denoising using statistical outlier filter...")
-            params.pc = params.pc.iloc[denoise(params.pc, 100, 1.0)]
+            params.pc = params.pc.iloc[denoise(params.pc, 50, 1.0)]
+
+        # calculate 3d point feature space
+        try:
+            params.features = add_features_gpu(params.pc)
+            params.avg_features = np.mean(params.features)
+        except:
+            params.features = np.zeros(len(params.pc))
+            params.avg_features = 0
 
         # calculate random sampling weights
         try:
-            params.weights = pow(preprocessing.minmax_scale(params.pc['refl'].values, feature_range=(1,100)),2)
+            params.weights = pow(preprocessing.minmax_scale(1-params.features, feature_range=(1,100)),2)
+            print('Sampling weights quantified')
         except:
-            params.weights = np.ones(len(params.pc))
+            params.weights = np.zeros(len(params.pc))
 
         # Reconfigure plot
         params.plot_centre = compute_plot_centre(params.pc)

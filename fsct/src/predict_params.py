@@ -1,8 +1,8 @@
 import os
 import numpy as np
 
-other_parameters = dict(box_dims=np.array([2, 2, 2]),
-                        box_overlap=np.array([0.5, 0.5, 0.5]),
+other_parameters = dict(box_dims=np.array([0.5, 0.5, 0.5]),
+                        box_overlap=np.array([1, 1, 1]),
                         min_pts=500,
                         max_pts=20000,
                         wood_class=0,

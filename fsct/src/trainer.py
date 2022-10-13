@@ -120,8 +120,15 @@ def SemanticTraining(params):
                                        batch_size=params.batch_size,
                                        shuffle=True, drop_last=True)
 
+    '''
+    Detect whether cuda and gpu's are available.
+    '''
+    
+    params.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if params.verbose: print('Using:', params.device)
 
-    model = Net(num_classes=2).to(params.device)
+    #model = Net(num_classes=2).to(params.device)
+    model = nn.DataParallel(Net(num_classes=2)).to(params.device)
     
     params.model_filepath = os.path.join(params.wdir,'model',params.model)
     if os.path.isfile(params.model_filepath):
@@ -141,7 +148,10 @@ def SemanticTraining(params):
         torch.save(model.state_dict(),params.model_filepath)
         training_history = np.empty([0])
 
-    model = model.to(params.device)
+    #   Initialise model on single or multiple GPU's
+    ##  To specify a specific GPU "params.device = torch.device(‘cuda:0’)" for GPU number 0
+    #model = model.to(params.device)
+    model = nn.DataParallel(model).to(params.device)
 
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=params.learning_rate)
     criterion = nn.CrossEntropyLoss()
@@ -151,9 +161,6 @@ def SemanticTraining(params):
     '''
     Train model. 
     '''
-    params.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if params.verbose: print('Using:', params.device)
-
     for epoch in range(params.num_epochs):
         print("=====================================================================")
         print("EPOCH ", epoch)
