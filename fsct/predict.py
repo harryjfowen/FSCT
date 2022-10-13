@@ -4,7 +4,7 @@ import argparse
 import pickle
 
 # from fsct.run_tools import FSCT
-from src.predict_params import other_parameters
+from src.parameters import prediction_parameters
 from src.tools import dict2class
 from src.preprocessing import Preprocessing
 from src.predicter import SemanticSegmentation
