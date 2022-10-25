@@ -1,0 +1,42 @@
+Hi all, 
+
+Just thought I would send an email outlining why and what we have been doing with the FSCT framework published by Sean. We have been working with your trimed down and forked version Phil.  
+It seems we have similar goals (from our last chat phil) and we are excited by phil's new tree segmentation approach and have a lot of TLS data to get through but FSCT wasnt working too well for us, more below.  
+
+
+Motive:
+
+For our European forests, the existing FSCT framework failed to classify wood beyond the first bifurcation point which seemed to coincide with the close proximity of leaves to wood, this was particularly problematic
+for most of our Mediterranean trees, pines and spruces. 
+After testing, we found that the main culprit was the random downsampling procedure, where a limit of 20,000 points within a voxel (pointnet++ limit) was completely degrading the cloud making visual
+distinquishing between wood and leaf near impossible.
+
+On top of this, our trees are quite different to those used in the intial model training, with complex management legacies, drought, along with species differences. 
+We decided to try and remedy these issues so that we could then use Phil's new tree segmentation algorithm, which due to the FSCT failure, wasnt working on our data. 
+
+Our plan is to not only re-train the model to improve transferability but also enhance its capacity to classify fine-scale branching which will hopefully help tree segmentation in some of our dense monolayered canopies. 
+Ultimately, we would like to leverage the big GPU cluster here at Cambridge to create a new model and make it openly available to people without these resources. We would also
+like to publish the alterations to the model mentioned below. We are also developing a semi-automatic training set across our European network. The idea being that we will have large volumes of data that would be difficult to obtain manually. 
+
+Plan/Done:
+
+[Model improvement]
+1. Firstly, we minimised the model to  only classify two classes (wood and leaf), we found CWD to redundant and there are many efficient ground classifcation algorithms out there 
+that can be utlised. We chose the cloth simulation which runs very fast. The hope was also that by minimising the model two a binary outcome it would perform better. 
+
+2. To minimise the effect of downsampling, we first weighted the downsampling based on reflectance with improved results but don't want the approach to depend on this. 
+The solution is to have the model preprocess boxes of varying sizes where needed. We found very small boxes performed poorly on large woody parts and was immensely long to compute. 
+The sweet spot for us is thought to be a hybrid whereby smaller boxes a disected in the crown and larger boxes retained around stems. The smaller boxes would also be used on smaller trees. 
+We have used a simple metric at small scales to isolate these parts of the crown. Alternatively, the weighted downsampling could be done using geometric features. 
+The geometric features are calculated on the GPU so overhead is small(ish)
+
+[Creating semi-automatic training data]
+
+3. This has been quite difficult but the idea is to use reflectance along with geometric features and threshold across scales to dilineate leaf and wood. This is working fairly well
+ but the comprimise was to remove 'difficult' areas rather then leave them in misclassified. We hope that the volume of data will outweigh any disadvantages and that having a more
+ accurate training set is more valuable and that data augmentation will also help iron out any potential biases. Some of our 30x30 m plots had 20+ scan positions (upright + tilt) and are emerging as good candidates for this procedure. 
+
+
+
+
+

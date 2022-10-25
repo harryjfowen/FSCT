@@ -16,6 +16,9 @@ from sklearn import preprocessing
 from sklearn.neighbors import NearestNeighbors
 from abc import ABC
 from sklearn.metrics import f1_score
+
+from torch_geometric.nn import DataParallel
+
 class TrainingDataset(Dataset, ABC):
     
     '''
@@ -120,16 +123,18 @@ def SemanticTraining(params):
                                        batch_size=params.batch_size,
                                        shuffle=True, drop_last=True)
 
+    
     '''
     Detect whether cuda and gpu's are available.
     '''
     
     params.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if params.verbose: print('Using:', params.device)
+    if params.verbose: print('Using:', torch.cuda.device_count(), "GPUs with", params.device)
 
-    #model = Net(num_classes=2).to(params.device)
-    model = nn.DataParallel(Net(num_classes=2)).to(params.device)
-    
+    #Find number of gpu devices 
+    devices=list(range(torch.cuda.device_count()))
+    model = Net(num_classes=2).to(params.device)
+
     params.model_filepath = os.path.join(params.wdir,'model',params.model)
     if os.path.isfile(params.model_filepath):
         print("\nLoading ", params.model_filepath)
@@ -151,10 +156,10 @@ def SemanticTraining(params):
     #   Initialise model on single or multiple GPU's
     ##  To specify a specific GPU "params.device = torch.device(‘cuda:0’)" for GPU number 0
     #model = model.to(params.device)
-    model = nn.DataParallel(model).to(params.device)
+    model = model.to(params.device)
 
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=params.learning_rate)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss().to(params.device)
     val_epoch_loss = 0
     val_epoch_acc = 0
     
@@ -173,7 +178,7 @@ def SemanticTraining(params):
         for data in train_loader:
             data.pos = data.pos.to(params.device)
             data.y = torch.unsqueeze(data.y, 0).to(params.device)
-            outputs = model(data)
+            outputs = model(data.cuda())
             loss = criterion(outputs, data.y)
 
             optimizer.zero_grad()
@@ -183,20 +188,20 @@ def SemanticTraining(params):
             _, preds = torch.max(outputs, 1)
             running_loss += loss.detach().item()
             running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
-            running_f1 += f1_score(data.y.cpu().data, preds.cpu(),average='micro')
+            #running_f1 += f1_score(data.y.cpu().data, preds.cpu(),average='micro')
 
             if i % 20 == 0:
                 print("Train sample accuracy: ",
                       np.around(running_acc / (i + 1), 4),
                       ", Loss: ",
-                      np.around(running_loss / (i + 1), 4),
-                      ", F1: ",
-                      np.around(running_f1 / (i + 1), 4)) 
+                      np.around(running_loss / (i + 1), 4))
+                      #", F1: ",
+                      #np.around(running_f1 / (i + 1), 4)) 
             i += 1
         
         epoch_loss = running_loss / len(train_loader)
         epoch_acc = running_acc / len(train_loader)
-        epoch_f1 = running_f1 / len(train_loader)
+        epoch_f1 = 0#running_f1 / len(train_loader)
                 
         val_epoch_loss = 0
         val_epoch_acc = 0
@@ -224,26 +229,26 @@ def SemanticTraining(params):
                 data.pos = data.pos.to(params.device)
                 data.y = torch.unsqueeze(data.y, 0).to(params.device)
 
-                outputs = model(data)
+                outputs = model(data.cuda())
                 loss = criterion(outputs, data.y)
 
                 _, preds = torch.max(outputs, 1)
                 running_loss += loss.detach().item()
                 running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
-                running_f1 += f1_score(data.y.cpu().data, preds.cpu(),average='micro')
+                #running_f1 += f1_score(data.y.cpu().data, preds.cpu(),average='micro')
                 
                 if i % 50 == 0:
                     print("Validation sample accuracy: ",
                       np.around(running_acc / (i + 1), 4),
                       ", Loss: ",
-                      np.around(running_loss / (i + 1), 4),
-                      ", F1: ",
-                      np.around(running_f1 / (i + 1), 4)) 
+                      np.around(running_loss / (i + 1), 4))
+                      #", F1: ",
+                      #np.around(running_f1 / (i + 1), 4)) 
                 i += 1
                 
             val_epoch_loss = running_loss / len(validation_loader)
             val_epoch_acc = running_acc / len(validation_loader)
-            val_epoch_f1 = running_f1 / len(validation_loader)
+            val_epoch_f1 = 0#running_f1 / len(validation_loader)
             
             epoch_results = np.array([[epoch, epoch_loss, epoch_acc, epoch_f1, val_epoch_loss, val_epoch_acc, val_epoch_f1]])
 

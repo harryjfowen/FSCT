@@ -18,7 +18,6 @@ from scipy import ndimage
 from src import ply_io, pcd_io
 import CSF
 import open3d as o3d
-from pykdtree.kdtree import KDTree
 
 def string_match(string1, string2):
     return all(any(x in y for y in string2) for x in string1)
@@ -353,14 +352,20 @@ def make_dtm(params):
     return params
 
 def denoise(cloud, knn, std):
+
     pcd = o3d.geometry.PointCloud()
+
     pcd.points = o3d.utility.Vector3dVector(cloud[['x', 'y', 'z']].to_numpy().astype('double'))
+
     _, ind = pcd.remove_statistical_outlier(nb_neighbors=knn,std_ratio=std)
+
     denoise_idx = np.array(ind)
+    
     return(denoise_idx)
 
 
 def smooth_classifcation(classified_arr, raw_cloud, knn):
+
     nbrs = KDTree(cloud[['x', 'y', 'z']].values)
     _, indices = nbrs.query(cloud[['x', 'y', 'z']], k=knn)
 
@@ -376,6 +381,9 @@ def smooth_classifcation(classified_arr, raw_cloud, knn):
     return cloud
 
 def nn_dist(cloud,knn):
+
     kd_tree = KDTree(cloud[['x', 'y', 'z']].values)
+
     dist, _ = kd_tree.query(cloud[['x', 'y', 'z']].values, k=knn)
+
     return np.mean(dist[:, 1:]) + (np.std(dist[:, 1:]))

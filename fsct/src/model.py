@@ -29,6 +29,7 @@ class SAModule(torch.nn.Module):
         idx = fps(pos, batch, ratio=self.ratio)
         row, col = radius(pos, pos[idx], self.r, batch, batch[idx],
                           max_num_neighbors=64)
+        #edge_index = torch.stack([col, row], dim=0)
         edge_index = torch.stack([col, row], dim=0)
         x = self.conv(x, (pos, pos[idx]), edge_index)
         pos, batch = pos[idx], batch[idx]
