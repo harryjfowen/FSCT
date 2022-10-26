@@ -57,7 +57,9 @@ class TrainingDataset(Dataset, ABC):
         return data
 
 
-def load_model(file, rank, model, optimizer):
+def load_model(path, epoch, rank, model, optimizer):
+
+    file = path / f'epoch_{epoch}.pth'
 
     torch.distributed.barrier()
 
@@ -71,16 +73,20 @@ def load_model(file, rank, model, optimizer):
 
     return model, optimizer
 
-def save_model(path,epoch,model_state,optimizer_state):
+def save_checkpoints(args, epoch, model_state, optimizer_state):
 
-    torch.save(
-        {
-            'epoch': epoch,
-            'model_state_dict': model_state,
-            'optimizer_state_dict': optimizer_state
-        },
-        path)
+    checkpoint_folder = os.path.join(args.wdir,'checkpoints')
+    
+    if not os.path.isdir(checkpoint_folder):
+        os.mkdir(checkpoint_folder)
+    
+    file = checkpoint_folder + '/'f'epoch_{epoch}.pth'
 
+    torch.save({'epoch': epoch,
+                'model_state_dict': model_state,
+                'optimizer_state_dict': optimizer_state},file)
+    
+    return True
 
 #########################################################################################################
 #                                       SEMANTIC TRAINING FUNCTION                                      #
@@ -94,7 +100,7 @@ def SemanticTraining(gpu,args):
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    if args.verbose: print('Using:', gpus, "GPUs with", device)
+    if args.verbose: print('Using:', args.gpus, "GPUs with", device)
     
     rank = args.nr * args.gpus + gpu	                          
     dist.init_process_group(backend='nccl',init_method='env://',world_size=args.world_size,rank=rank)  
@@ -109,7 +115,7 @@ def SemanticTraining(gpu,args):
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(Net(num_classes=2)).to(rank)
     model = nn.parallel.DistributedDataParallel(model, device_ids=[rank])
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss()#nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.learning_rate)
 
     #####################################################################################################
@@ -128,6 +134,19 @@ def SemanticTraining(gpu,args):
                               shuffle=False, drop_last=True, num_workers=0,
                               pin_memory=False, sampler=train_sampler)
 
+    '''
+    And for validation...
+    '''
+
+    val_dataset = TrainingDataset(root_dir=os.path.join(args.wdir, "data", "validation/sample_dir/"),
+                                    device = rank, min_pts=args.min_pts,
+                                    max_pts=args.max_pts, augmentation=args.augmentation)
+
+    val_sampler = DistributedSampler(val_dataset, num_replicas=args.world_size, rank=rank)
+                                    
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size,
+                            shuffle=False, drop_last=True, num_workers=0,
+                            pin_memory=False, sampler=val_sampler)
 
     #####################################################################################################
 
@@ -136,39 +155,54 @@ def SemanticTraining(gpu,args):
     '''
 
     args.model_filepath = os.path.join(args.wdir,'model',args.model)
+
     if os.path.isfile(args.model_filepath):
         print("")
+
     else:
         print("\nModel not found, creating new file...")
         torch.save(model.state_dict(),args.model_filepath)
 
-    
+    '''
+    Create function to log training history 
+    '''
+
+    def log_history(args,history):
+        try:
+            training_history = np.savetxt(os.path.join(args.wdir, 'model', os.path.splitext(args.model)[0] + "_history.csv"), history)
+            print("Saved training history successfully.")
+
+        except OSError:
+            training_history = np.savetxt(os.path.join(args.wdir, 'model', os.path.splitext(args.model)[0] + "_history_backup.csv"), history)
+            pass
+
     #####################################################################################################
     
     '''
-    Train model. 
+    Train and Validate model. 
     '''
 
-    it = 0
-    for epoch in range(args.num_epochs):
+    for epoch in range(1,args.num_epochs+1):
+
+        '''
+        Train model on all GPU's. 
+        '''
 
         model.train()
-        running_loss = 0.0
-        running_acc = 0
-        epoch_loss = []
-        epoch_acc = []
+        train_running_loss = 0.0
+        train_running_acc = 0
 
         if rank == 0:
             print("=====================================================================")
             print("EPOCH ", epoch)
 
-        if epoch > 1:
-            model, optimizer = load_model(args.model_filepath, rank, model, optimizer)
+        # if epoch > 1:
+        #     model, optimizer = load_model(args.model_filepath, rank, model, optimizer)
 
         for i, data in enumerate(train_loader):
             data.pos = data.pos.to(rank)
             data.y = torch.unsqueeze(data.y, 0).to(rank)
-            outputs = model(data)
+            outputs = model(data.to(rank))
             loss = criterion(outputs, data.y)
 
             optimizer.zero_grad()
@@ -176,30 +210,73 @@ def SemanticTraining(gpu,args):
             optimizer.step()
 
             _, preds = torch.max(outputs, 1)
-            running_loss += loss.detach().item()
-            running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
+            train_running_loss += loss.detach().item()
+            train_running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
 
             if i % 20 == 0 and rank == 0:
                 print("Train sample accuracy: ",
-                      np.around(running_acc / (i + 1), 4),
+                      np.around(train_running_acc / (i + 1), 4),
                       ", Loss: ",
-                      np.around(running_loss / (i + 1), 4))
-        
-        epoch_loss.append(running_loss / len(train_loader))
-        epoch_acc.append(running_acc / len(train_loader))
-        
-        print("\nTrain EPOCH accuracy: ", np.around(epoch_acc[it], 4), ", Loss: ", np.around(epoch_loss[it], 4))
+                      np.around(train_running_loss / (i + 1), 4))
 
-        #Save model
-        if rank == 0:
-            if args.best_model and epoch_loss[it] <= min(epoch_loss):
-                print("Best model saved...\n")
-                save_model(args.model_filepath, epoch, model.state_dict(), optimizer.state_dict())
-            else:
-                save_model(args.model_filepath, epoch, model.state_dict(), optimizer.state_dict())
-        
-        it+=1
         dist.barrier()
+
+        '''
+        Validate model only on single GPU for now. 
+        '''
+
+        model.eval()
+        val_running_loss = 0.0
+        val_running_acc = 0
+
+        for j, data in enumerate(val_loader):
+            data.pos = data.pos.to(rank)
+            data.y = torch.unsqueeze(data.y, 0).to(rank)
+
+            outputs = model(data.to(rank))
+            loss = criterion(outputs, data.y)
+
+            _, preds = torch.max(outputs, 1)
+            val_running_loss += loss.detach().item()
+            val_running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
+            
+            if j % 20 == 0 and rank == 0:
+                print("Validation sample accuracy: ",
+                    np.around(val_running_acc / (j + 1), 4),
+                    ", Loss: ",
+                    np.around(val_running_loss / (j + 1), 4))
+
+        dist.barrier()
+
+        '''
+        Save model checkpoints and final epoch model 
+        '''
+
+        if rank == 0:
+            train_epoch_loss = train_running_loss / len(train_loader)
+            train_epoch_acc = train_running_acc / len(train_loader)
+
+            val_epoch_loss = val_running_loss / len(val_loader)
+            val_epoch_acc = val_running_acc / len(val_loader)
+
+            epoch_results = np.array([[epoch, train_epoch_loss, train_epoch_acc, val_epoch_loss, val_epoch_acc]])
+
+            if epoch == 1:
+                history = epoch_results
+            else:
+                history = np.vstack((history,epoch_results))
+
+            log_history(args,history)
+
+            print("\nTrain EPOCH Acc: ", np.around(train_epoch_acc, 4), ", Loss: ", np.around(train_epoch_loss, 4),
+                    ", Val Acc: ", np.around(val_epoch_acc, 4),  ", Val Loss: ", np.around(val_epoch_loss, 4), "\n")
+            
+            if epoch in args.checkpoints:
+                save_checkpoints(args, epoch, model.state_dict(), optimizer.state_dict())
+            
+            if epoch == args.num_epochs:
+                print("Saving final GLOBAL model")
+                torch.save(model.state_dict(), args.model_filepath)
     
     #Cleanup processes
     dist.destroy_process_group()
