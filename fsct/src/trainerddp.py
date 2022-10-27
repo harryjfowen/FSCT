@@ -1,6 +1,7 @@
 from src.tools import load_file, save_file, get_fsct_path
 from src.augmentation import augmentations
 from src.model import Net
+from tqdm import tqdm
 
 import numpy as np
 import torch
@@ -8,10 +9,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch_geometric.data import Dataset, DataLoader, Data
 import glob
-import random
-import threading
 import os
-import shutil
 from abc import ABC
 
 from torch.nn.parallel import DistributedDataParallel
@@ -19,6 +17,9 @@ import torch.multiprocessing as mp
 import torch.distributed as dist
 from torch_geometric.nn import DataParallel
 from torch.utils.data.distributed import DistributedSampler
+
+from time import sleep
+
 
 class TrainingDataset(Dataset, ABC):
     
@@ -57,6 +58,18 @@ class TrainingDataset(Dataset, ABC):
         return data
 
 
+def get_fsct_path(location_in_fsct=""):
+
+    current_wdir = os.getcwd()
+    
+    output_path = current_wdir[: current_wdir.index("fsct") + 4]
+    
+    if len(location_in_fsct) > 0:
+        output_path = os.path.join(output_path, location_in_fsct)
+    
+    return output_path.replace("\\", "/")
+
+
 def load_model(path, epoch, rank, model, optimizer):
 
     file = path / f'epoch_{epoch}.pth'
@@ -72,6 +85,7 @@ def load_model(path, epoch, rank, model, optimizer):
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     return model, optimizer
+
 
 def save_checkpoints(args, epoch, model_state, optimizer_state):
 
@@ -193,33 +207,35 @@ def SemanticTraining(gpu,args):
         train_running_acc = 0
 
         if rank == 0:
-            print("=====================================================================")
+            print("\n=============================================================================================")
             print("EPOCH ", epoch)
 
-        # if epoch > 1:
-        #     model, optimizer = load_model(args.model_filepath, rank, model, optimizer)
+        with tqdm(total=len(train_loader)*args.batch_size, colour='white', ascii="░▒", bar_format='{l_bar}{bar:20}{r_bar}{bar:-20b}') as tepoch:
 
-        for i, data in enumerate(train_loader):
-            data.pos = data.pos.to(rank)
-            data.y = torch.unsqueeze(data.y, 0).to(rank)
-            outputs = model(data.to(rank))
-            loss = criterion(outputs, data.y)
+            for i, data in enumerate(train_loader):
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                data.pos = data.pos.to(rank)
+                data.y = torch.unsqueeze(data.y, 0).to(rank)
+                outputs = model(data.to(rank))
+                loss = criterion(outputs, data.y)
 
-            _, preds = torch.max(outputs, 1)
-            train_running_loss += loss.detach().item()
-            train_running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-            if i % 20 == 0 and rank == 0:
-                print("Train sample accuracy: ",
-                      np.around(train_running_acc / (i + 1), 4),
-                      ", Loss: ",
-                      np.around(train_running_loss / (i + 1), 4))
+                _, preds = torch.max(outputs, 1)
+                train_running_loss += loss.detach().item()
+                train_running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
 
-        dist.barrier()
+                if rank == 0:
+                    #tepoch.set_description(f"Train Epoch {epoch}")
+                    tepoch.set_description(f"Train")
+                    tepoch.update(1)
+                    tepoch.set_postfix(accuracy=np.around(train_running_acc / (i + 1), 4), loss=np.around(train_running_loss / (i + 1), 4))
+                    sleep(0.1)
+
+            tepoch.close()
+            dist.barrier()
 
         '''
         Validate model only on single GPU for now. 
@@ -228,24 +244,29 @@ def SemanticTraining(gpu,args):
         model.eval()
         val_running_loss = 0.0
         val_running_acc = 0
+        sleep(0.1)
 
-        for j, data in enumerate(val_loader):
-            data.pos = data.pos.to(rank)
-            data.y = torch.unsqueeze(data.y, 0).to(rank)
+        with tqdm(total=len(val_loader)*args.batch_size, colour='white', ascii="▒█", bar_format='{l_bar}{bar:20}{r_bar}{bar:-20b}') as tepoch:
 
-            outputs = model(data.to(rank))
-            loss = criterion(outputs, data.y)
+            for j, data in enumerate(val_loader):
+                data.pos = data.pos.to(rank)
+                data.y = torch.unsqueeze(data.y, 0).to(rank)
 
-            _, preds = torch.max(outputs, 1)
-            val_running_loss += loss.detach().item()
-            val_running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
-            
-            if j % 20 == 0 and rank == 0:
-                print("Validation sample accuracy: ",
-                    np.around(val_running_acc / (j + 1), 4),
-                    ", Loss: ",
-                    np.around(val_running_loss / (j + 1), 4))
+                outputs = model(data.to(rank))
+                loss = criterion(outputs, data.y)
 
+                _, preds = torch.max(outputs, 1)
+                val_running_loss += loss.detach().item()
+                val_running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
+                
+                if rank == 0:
+                    #tepoch.set_description(f"Eval Epoch {epoch}")
+                    tepoch.set_description(f"Eval ")
+                    tepoch.update(1)
+                    tepoch.set_postfix(accuracy=np.around(val_running_acc / (j + 1), 4), loss=np.around(val_running_loss / (j + 1), 4))
+                    sleep(0.1)
+
+        tepoch.close()
         dist.barrier()
 
         '''
@@ -261,6 +282,9 @@ def SemanticTraining(gpu,args):
 
             epoch_results = np.array([[epoch, train_epoch_loss, train_epoch_acc, val_epoch_loss, val_epoch_acc]])
 
+            print("\nTrain EPOCH Acc: ", np.around(train_epoch_acc, 4), ", Loss: ", np.around(train_epoch_loss, 4),
+                    ", Val Acc: ", np.around(val_epoch_acc, 4),  ", Val Loss: ", np.around(val_epoch_loss, 4))
+            
             if epoch == 1:
                 history = epoch_results
             else:
@@ -268,9 +292,6 @@ def SemanticTraining(gpu,args):
 
             log_history(args,history)
 
-            print("\nTrain EPOCH Acc: ", np.around(train_epoch_acc, 4), ", Loss: ", np.around(train_epoch_loss, 4),
-                    ", Val Acc: ", np.around(val_epoch_acc, 4),  ", Val Loss: ", np.around(val_epoch_loss, 4), "\n")
-            
             if epoch in args.checkpoints:
                 save_checkpoints(args, epoch, model.state_dict(), optimizer.state_dict())
             

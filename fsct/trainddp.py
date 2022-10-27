@@ -1,12 +1,10 @@
 from src.trainerddp import SemanticTraining
-from src.tools import dict2class
 from src.tools import get_fsct_path
 import argparse, glob, os
 import torch
 import numpy as np
 
 import torch.multiprocessing as mp
-import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 if __name__ == '__main__':
