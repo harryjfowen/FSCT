@@ -1,4 +1,3 @@
-from src.tools import load_file, save_file, get_fsct_path
 from src.augmentation import augmentations
 from src.model import Net
 from tqdm import tqdm
@@ -12,14 +11,12 @@ import glob
 import os
 from abc import ABC
 
-from torch.nn.parallel import DistributedDataParallel
-import torch.multiprocessing as mp
 import torch.distributed as dist
-from torch_geometric.nn import DataParallel
 from torch.utils.data.distributed import DistributedSampler
 
 from time import sleep
-
+from sklearn.metrics import f1_score as F1
+from src.poly_focal_loss import Poly1FocalLoss
 
 class TrainingDataset(Dataset, ABC):
     
@@ -58,18 +55,6 @@ class TrainingDataset(Dataset, ABC):
         return data
 
 
-def get_fsct_path(location_in_fsct=""):
-
-    current_wdir = os.getcwd()
-    
-    output_path = current_wdir[: current_wdir.index("fsct") + 4]
-    
-    if len(location_in_fsct) > 0:
-        output_path = os.path.join(output_path, location_in_fsct)
-    
-    return output_path.replace("\\", "/")
-
-
 def load_model(path, epoch, rank, model, optimizer):
 
     file = path / f'epoch_{epoch}.pth'
@@ -102,6 +87,7 @@ def save_checkpoints(args, epoch, model_state, optimizer_state):
     
     return True
 
+
 #########################################################################################################
 #                                       SEMANTIC TRAINING FUNCTION                                      #
 #                                       ==========================                                      #
@@ -125,12 +111,15 @@ def SemanticTraining(gpu,args):
     Setup model. 
     '''
     
-    #Change to sync batch norm for across gpu enhanced performance 
     model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(Net(num_classes=2)).to(rank)
     model = nn.parallel.DistributedDataParallel(model, device_ids=[rank])
 
-    criterion = nn.CrossEntropyLoss()#nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.learning_rate)
+    #criterion = nn.CrossEntropyLoss()#nn.BCEWithLogitsLoss()#
+    W = torch.tensor([10., 1.]).reshape([1, 2, 1]).to(rank)
+    criterion = Poly1FocalLoss(num_classes=2,reduction='mean',label_is_onehot=False,pos_weight=W,gamma=2)
+
+    optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=args.learning_rate, weight_decay=0.01)
+    #scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=0.001, steps_per_epoch=10, epochs=args.num_epochs,anneal_strategy='linear')
 
     #####################################################################################################
     
@@ -138,9 +127,9 @@ def SemanticTraining(gpu,args):
     Setup data loaders. 
     '''
 
-    train_dataset = TrainingDataset(root_dir=os.path.join(args.wdir, "data", "train/sample_dir/"),
+    train_dataset = TrainingDataset(root_dir=args.trdir,
                                     device = rank, min_pts=args.min_pts,
-                                    max_pts=args.max_pts, augmentation=args.augmentation)
+                                    max_pts=args.max_pts, augmentation=True)
 
     train_sampler = DistributedSampler(train_dataset, num_replicas=args.world_size, rank=rank)
                                     
@@ -152,9 +141,9 @@ def SemanticTraining(gpu,args):
     And for validation...
     '''
 
-    val_dataset = TrainingDataset(root_dir=os.path.join(args.wdir, "data", "validation/sample_dir/"),
+    val_dataset = TrainingDataset(root_dir=args.vadir,
                                     device = rank, min_pts=args.min_pts,
-                                    max_pts=args.max_pts, augmentation=args.augmentation)
+                                    max_pts=args.max_pts, augmentation=False)
 
     val_sampler = DistributedSampler(val_dataset, num_replicas=args.world_size, rank=rank)
                                     
@@ -205,18 +194,23 @@ def SemanticTraining(gpu,args):
         model.train()
         train_running_loss = 0.0
         train_running_acc = 0
+        running_wood_acc = 0
 
         if rank == 0:
+            sleep(0.1)
             print("\n=============================================================================================")
             print("EPOCH ", epoch)
 
-        with tqdm(total=len(train_loader)*args.batch_size, colour='white', ascii="░▒", bar_format='{l_bar}{bar:20}{r_bar}{bar:-20b}') as tepoch:
+        it_batch = args.nodes * args.gpus * args.batch_size
+        total_length = len(train_loader)*it_batch    
+        with tqdm(total=int(total_length), colour='white', ascii="░▒", bar_format='{l_bar}{bar:20}{r_bar}{bar:-20b}') as tepoch:
 
             for i, data in enumerate(train_loader):
 
                 data.pos = data.pos.to(rank)
                 data.y = torch.unsqueeze(data.y, 0).to(rank)
                 outputs = model(data.to(rank))
+
                 loss = criterion(outputs, data.y)
 
                 optimizer.zero_grad()
@@ -224,14 +218,18 @@ def SemanticTraining(gpu,args):
                 optimizer.step()
 
                 _, preds = torch.max(outputs, 1)
+
                 train_running_loss += loss.detach().item()
                 train_running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
+                running_wood_acc += F1(data.y.flatten().cpu(), preds.flatten().cpu(), average='binary', pos_label=0, zero_division=0)
 
                 if rank == 0:
                     #tepoch.set_description(f"Train Epoch {epoch}")
                     tepoch.set_description(f"Train")
-                    tepoch.update(1)
-                    tepoch.set_postfix(accuracy=np.around(train_running_acc / (i + 1), 4), loss=np.around(train_running_loss / (i + 1), 4))
+                    tepoch.update(it_batch)
+                    tepoch.set_postfix(acc=np.around(train_running_acc / (i + 1), 5),
+                                       loss=np.around(train_running_loss / (i + 1), 5),
+                                       wood_acc=np.around(running_wood_acc / (i + 1), 5))
                     sleep(0.1)
 
             tepoch.close()
@@ -244,26 +242,31 @@ def SemanticTraining(gpu,args):
         model.eval()
         val_running_loss = 0.0
         val_running_acc = 0
+        val_running_wood_acc = 0
         sleep(0.1)
 
-        with tqdm(total=len(val_loader)*args.batch_size, colour='white', ascii="▒█", bar_format='{l_bar}{bar:20}{r_bar}{bar:-20b}') as tepoch:
+        total_length = len(val_loader)*it_batch	   
+        with tqdm(total=int(total_length), colour='white', ascii="▒█", bar_format='{l_bar}{bar:20}{r_bar}{bar:-20b}') as tepoch:
 
             for j, data in enumerate(val_loader):
                 data.pos = data.pos.to(rank)
                 data.y = torch.unsqueeze(data.y, 0).to(rank)
-
                 outputs = model(data.to(rank))
+                
                 loss = criterion(outputs, data.y)
-
+                
                 _, preds = torch.max(outputs, 1)
                 val_running_loss += loss.detach().item()
                 val_running_acc += torch.sum(preds == data.y.data).item() / data.y.shape[1]
+                val_running_wood_acc += F1(data.y.flatten().cpu(), preds.flatten().cpu(), average='binary', pos_label=0, zero_division=0)
                 
                 if rank == 0:
                     #tepoch.set_description(f"Eval Epoch {epoch}")
                     tepoch.set_description(f"Eval ")
-                    tepoch.update(1)
-                    tepoch.set_postfix(accuracy=np.around(val_running_acc / (j + 1), 4), loss=np.around(val_running_loss / (j + 1), 4))
+                    tepoch.update(it_batch)
+                    tepoch.set_postfix(acc=np.around(val_running_acc / (j + 1), 5),
+                                       loss=np.around(val_running_loss / (j + 1), 5),
+                                       wood_acc=np.around(val_running_wood_acc / (j + 1), 5))
                     sleep(0.1)
 
         tepoch.close()

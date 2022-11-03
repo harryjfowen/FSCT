@@ -1,20 +1,9 @@
 import torch
 import torch.nn.functional as F
 from torch_geometric.nn import knn_interpolate
-from torch_geometric.utils import intersection_and_union as i_and_u
-from torch.nn import Sequential as Seq, Linear as Lin, ReLU, BatchNorm1d as BN
-from torch_geometric.data import Dataset, DataLoader, Data
+from torch.nn import Sequential as Seq, Linear as Lin, ReLU, GELU, BatchNorm1d as BN
 from torch_geometric.nn import PointConv, fps, radius, global_max_pool
-import numpy as np
-import glob
-import pandas as pd
-import random
-import math
 import torch.optim as optim
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.lines import Line2D
-from matplotlib.animation import FuncAnimation
 from torch.optim.lr_scheduler import ExponentialLR
 
 
@@ -50,7 +39,7 @@ class GlobalSAModule(torch.nn.Module):
 
 def MLP(channels, batch_norm=True):
     return Seq(*[
-            Seq(Lin(channels[i - 1], channels[i]), ReLU(), BN(channels[i]))
+            Seq(Lin(channels[i - 1], channels[i]), GELU(), BN(channels[i]))
             for i in range(1, len(channels))
     ])
 
@@ -98,8 +87,8 @@ class Net(torch.nn.Module):
 
         x = x.unsqueeze(dim=0)
         x = x.permute(0, 2, 1)
-        x = self.drop1(F.relu(self.bn1(self.conv1(x))))
+        #x = self.drop1(F.gelu(self.bn1(self.conv1(x))))
+        x = F.gelu(self.bn1(self.conv1(x)))
         x = self.conv2(x)
-        x = F.log_softmax(x, dim=1)
-        #x = torch.sigmoid(x)
+        #x = F.log_softmax(x, dim=1)
         return x
