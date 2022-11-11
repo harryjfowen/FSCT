@@ -1,7 +1,5 @@
-from sklearn.neighbors import NearestNeighbors
 import numpy as np
 import glob
-from sklearn.neighbors import NearestNeighbors
 from multiprocessing import Pool, get_context
 import pandas as pd
 import os
@@ -11,7 +9,7 @@ from sklearn.cluster import Birch
 from scipy.interpolate import griddata
 from copy import deepcopy
 from multiprocessing import get_context
-from scipy import spatial
+from scipy.spatial import cKDTree
 import string
 import struct
 from scipy import ndimage
@@ -272,7 +270,7 @@ def low_resolution_hack_mode(point_cloud, num_iterations, min_spacing, num_procs
 #need to find out how to remove inf values from nbrs query!!
 def verticality(arr, knn, r):
     ids = np.arange(arr.shape[0])
-    nbrs = KDTree(arr)
+    nbrs = cKDTree(arr)
     dist, nbrs_idx = nbrs.query(arr, k=knn, distance_upper_bound = r)
     V = np.zeros([arr.shape[0], 1], dtype=float)
     for i in ids:

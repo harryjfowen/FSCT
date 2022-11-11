@@ -58,8 +58,8 @@ def augmentations(x, y, min_sample_points):
 
     rotations = [np.random.uniform(-90, 90), np.random.uniform(-90, 90), np.random.uniform(-180, 180)]
     x = rotate_3d(x, rotations)
-    x = random_scale_change(x, 0.8, 1.2)
-    x = random_noise_addition(x)
+    #x = random_scale_change(x, 0.8, 1.2)
+    #x = random_noise_addition(x)
 
     # This already done in preprocessing to an extent - dont want to degrade data further
     #if np.random.uniform(0, 1) >= 0.8 and x.shape[0] > min_sample_points:

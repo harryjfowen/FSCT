@@ -2,6 +2,7 @@ from src.parameters import train_parameters
 from src.trainer import SemanticTraining
 from src.tools import dict2class
 from src.tools import get_fsct_path
+from src.preprocessing import preprocessing
 import argparse, glob, os
 import torch
 
@@ -37,6 +38,7 @@ if __name__ == '__main__':
         if (len(glob.glob(os.path.join(params.wdir + '/data/*/*/*.npy'))) == 0):
                 params.preprocess_datasets = True
                 print("No preprocessed data found. Switching preprocessing to 'True'")
+                Preprocessing(params)
 
         '''
         Run semantic training. 

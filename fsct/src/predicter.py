@@ -15,6 +15,7 @@ import torch
 import torch_geometric
 from torch_geometric.data import Dataset, DataLoader, Data
 from src.model import Net
+import torch.nn.functional as F
 
 from src.tools import save_file, make_dtm, get_fsct_path
 
@@ -44,49 +45,44 @@ class TestingDataset(Dataset, ABC):
         return data
 
 
-def SemanticSegmentation(params):
+def SemanticSegmentation(gpu,args):
 
     '''
     Script to predict probability of leaf and wood from point cloud data. 
     '''
-    # if xyz is in global coords (e.g. when re-running) reset
-    # coods to mean pos - required for acccurate running of 
-    # torch [is mean of the cloud close to 0,0,0]
-    if not np.all(np.isclose(params.pc.mean()[['x', 'y', 'z']], [0, 0, 0], atol=.1)):
-        params.pc[['x', 'y', 'z']] -= params.global_shift
 
-    if params.verbose: print('----- semantic segmentation started -----')
-    params.sem_seg_start_time = time.time()
+    if args.verbose: print('----- semantic segmentation started -----')
+    args.sem_seg_start_time = time.time()
 
-    params.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if params.verbose: print('using:', params.device)
+    args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if args.verbose: print('using:', args.device)
 
     # generates pytorch dataset iterable
-    test_dataset = TestingDataset(root_dir=params.wdir,
-                                  points_per_box=params.max_pts,
-                                  device=params.device)
-    test_loader = DataLoader(test_dataset, batch_size=params.batch_size, shuffle=False,
+    test_dataset = TestingDataset(root_dir=args.wdir,
+                                  points_per_box=args.max_pts,
+                                  device=args.device)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False,
                                      num_workers=0)
 
     '''
     Initialise model
     '''
-    #model = Net(num_classes=2).to(params.device)
-    model = nn.DataParallel(Net(num_classes=2)).to(params.device)
+    
+    model = Net(num_classes=2).to(args.device)
 
-    params.model_filepath = os.path.join(get_fsct_path(),'model',params.model)
-    model.load_state_dict(torch.load(params.model_filepath, map_location=params.device), strict=False)
+    args.model_filepath = os.path.join(get_fsct_path(),'model',args.model)
+    model.load_state_dict(torch.load(args.model_filepath, map_location=args.device), strict=False)
     model.eval()
 
     with torch.no_grad():
-        output_point_cloud = np.zeros((0, 3 + 2))#changed 4 to 2
         output_list = []
-        for data in tqdm(test_loader, disable=False if params.verbose else True):
-            data = data.to(params.device)
+        for data in tqdm(test_loader, disable=False if args.verbose else True):
+            data = data.to(args.device)
             out = model(data)
-            out = out.permute(2, 1, 0).squeeze()
+            print(out)
             batches = np.unique(data.batch.cpu())
-            out = torch.softmax(out.cpu().detach(), axis=1)
+            out = torch.sigmoid(out.cpu().detach())#, axis=1)
+            print(out)
             pos = data.pos.cpu()
             output = np.hstack((pos, out))
 
@@ -100,48 +96,45 @@ def SemanticSegmentation(params):
 
     del outputb, out, batches, pos, output  
 
-    if params.verbose: print("Choosing most confident labels...")
-
+    if args.verbose: print("Choosing most confident labels...")
+    print(classified_pc[:, :])
     #Build KD tree neighbourhoods to both project results onto original cloud (before downsampling) and smooth out classifcation results
     neighbours = NearestNeighbors(n_neighbors=16, 
                                   algorithm='kd_tree', 
                                   metric='euclidean', 
-                                  radius=0.025).fit(classified_pc[:, :3])
-    _, indices = neighbours.kneighbors(params.pc[['x', 'y', 'z']].values)
+                                  radius=0.05).fit(classified_pc[:, :3])
+    _, indices = neighbours.kneighbors(args.pc[['x', 'y', 'z']].values)
 
-    params.pc = params.pc.drop(columns=[c for c in params.pc.columns if c in ['label', 'pWood', 'pLeaf']])
+    args.pc = args.pc.drop(columns=[c for c in args.pc.columns if c in ['label', 'pWood', 'pLeaf']])
 
     #Calculate summary labels and probabilities within KD tree neighbourhoods
-    labels = np.zeros((params.pc.shape[0], 2))
+    labels = np.zeros((args.pc.shape[0], 2))
     labels[:, :2] = np.median(classified_pc[indices][:, :, -2:], axis=1)
-    params.pc.loc[params.pc.index, 'label'] = np.argmax(labels[:, :2], axis=1)
+    args.pc.loc[args.pc.index, 'label'] = np.argmax(labels[:, :2], axis=1)
 
     #Collect probabilites from classification both classes
-    probs = pd.DataFrame(index=params.pc.index, data=labels[:, :2], columns=['pWood','pLeaf'])
-    params.pc = params.pc.join(probs)
+    probs = pd.DataFrame(index=args.pc.index, data=labels[:, :2], columns=['pWood','pLeaf'])
+    args.pc = args.pc.join(probs)
 
     # attribute points as wood if any points have
-    # a wood probability > params.is_wood (Morel et al. 2020)
-    is_wood = np.any(classified_pc[indices][:, :, -2] > params.is_wood, axis=1)
-    params.pc.loc[is_wood, 'label'] = params.wood_class
+    # a wood probability > args.is_wood (Morel et al. 2020)
+    #is_wood = np.any(classified_pc[indices][:, :, -2] > args.is_wood, axis=1)
+    #args.pc.loc[is_wood, 'label'] = args.wood_class
 
     ##Add ground points and labeling from prior CSF classifcation
-    params.grd.loc[:, 'label'] = params.terrain_class
-    params.grd.loc[:, ['pWood','pLeaf']] = 0
-    params.pc = params.pc.append(params.grd, ignore_index=True)
-    
-    #Shift cloud back to where it was
-    params.pc[['x', 'y', 'z']] += params.global_shift
+    # args.grd.loc[:, 'label'] = args.terrain_class
+    # args.grd.loc[:, ['pWood','pLeaf']] = 0
+    # args.pc = args.pc.append(args.grd, ignore_index=True)
 
-    #calculate dtm
-    params = make_dtm(params)
-    params.pc.loc[params.pc.n_z <= params.ground_height_threshold, 'label'] = params.terrain_class
+    # #calculate dtm
+    # args.= make_dtm(args.
+    # args.pc.loc[args.pc.n_z <= args.ground_height_threshold, 'label'] = args.terrain_class
 
-    save_file(os.path.join(params.odir, params.basename + '.segmented.' + params.output_fmt), 
-              params.pc, additional_fields=['n_z', 'label', 'pWood', 'pLeaf'] + params.headers)
+    save_file(os.path.join(args.odir, args.basename + '.segmented.' + args.output_fmt), 
+              args.pc, additional_fields=['label', 'pWood', 'pLeaf'] + args.headers)
 
-    params.sem_seg_total_time = time.time() - params.sem_seg_start_time
-    if not params.keep_npy: [os.unlink(f) for f in test_dataset.filenames]
-    print("semantic segmentation done in", params.sem_seg_total_time, 's\n')
+    args.sem_seg_total_time = time.time() - args.sem_seg_start_time
+    if not args.keep_npy: [os.unlink(f) for f in test_dataset.filenames]
+    print("semantic segmentation done in", args.sem_seg_total_time, 's\n')
     
     return params

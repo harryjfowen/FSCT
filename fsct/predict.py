@@ -4,10 +4,11 @@ import argparse
 import pickle
 
 # from fsct.run_tools import FSCT
-from src.parameters import prediction_parameters
+from src.parameters import predict_parameters
 from src.tools import dict2class
 from src.preprocessing import Preprocessing
 from src.predicter import SemanticSegmentation
+from src.tools import load_file
 
 if __name__ == '__main__':
     
@@ -40,18 +41,18 @@ if __name__ == '__main__':
     params = parser.parse_args()
     
     ### sanity checks ###
-    if params.point_cloud == '' and params.params == '':
-        raise Exception('no input specified, use either --point-cloud or --params')
+    # if params.point_cloud == '' and params.params == '':
+    #     raise Exception('no input specified, use either --point-cloud or --params')
     
-    if not os.path.isfile(params.point_cloud):
-        if not os.path.isfile(params.params):
-            raise Exception(f'no point cloud at {params.point_cloud}')
+    # if not os.path.isfile(params.point_cloud):
+    #     if not os.path.isfile(params.params):
+    #         raise Exception(f'no point cloud at {params.point_cloud}')
     
-    if params.buffer > 0:
-        if params.tile_index == '':
-            raise Exception(f'buffer > 0 but no tile index specified, use --tile-index')
-        if not os.path.isfile(params.tile_index):
-            raise Exception(f'buffer > 0 but no tile index at {params.tile_index}')
+    # if params.buffer > 0:
+    #     if params.tile_index == '':
+    #         raise Exception(f'buffer > 0 but no tile index specified, use --tile-index')
+    #     if not os.path.isfile(params.tile_index):
+    #         raise Exception(f'buffer > 0 but no tile index at {params.tile_index}')
     
     ### end sanity checks ###
 
@@ -68,7 +69,7 @@ if __name__ == '__main__':
             if k == 'batch_size': continue
             setattr(params, k, v)
     else:
-        for k, v in other_parameters.items():
+        for k, v in predict_parameters.items():
             setattr(params, k, v)
         # i.e. if running for the first time - 
         # hack to add to params where used for 
@@ -87,11 +88,17 @@ if __name__ == '__main__':
             if k == 'global_shift': v = v.values
             print('{:<35}{}'.format(k, v)) 
 
-    if params.step >= 0 and not params.steps_completed[0]:
-        params = Preprocessing(params)
-        params.steps_completed[0] = True
-        pickle.dump(params, open(os.path.join(params.odir, f'{params.basename}.params.pickle'), 'wb'))
+    # if params.step >= 0 and not params.steps_completed[0]:
+    #     params = Preprocessing(params)
+    #     params.steps_completed[0] = True
+    #     pickle.dump(params, open(os.path.join(params.odir, f'{params.basename}.params.pickle'), 'wb'))
 
+    params.wdir = '/home/harryowen/Desktop/small_train_set/sample.tmp'
+    params.pc, params.headers = load_file(filename='/home/harryowen/Desktop/small_train_set/raw.ply', additional_headers=True, verbose=True)
+    params.odir = '/home/harryowen/Desktop/small_train_set/'
+    params.basename = 'raw'
+    params.keep_npy = True
+    
     if params.step >= 1 and not params.steps_completed[1]:
         params = SemanticSegmentation(params)
         params.steps_completed[1] = True

@@ -18,7 +18,7 @@ def save_pts(params, I, bx, by, bz):
 
     if len(pc) > params.min_pts:
         if len(pc) > params.max_pts:
-            pc = pc.sample(n=params.max_pts,weights=params.weights[pc.index])
+            pc = pc.sample(n=params.max_pts)
 
         if params.mode == 'train':
             np.save(os.path.join(params.odir, f'{I:07}'), pc[['x', 'y', 'z', 'label']].values)
@@ -65,42 +65,22 @@ def Preprocessing(params):
                                    accurate=False, keep_points=False)
         
         # Denoise the point cloud usign a statistical filter
-        if params.mode == 'predict':
-            print("Denoising using statistical outlier filter...")
-            params.pc = params.pc.iloc[denoise(params.pc, 50, 1.0)]
-
-        # calculate 3d point feature space
-        try:
-            params.features = add_features_gpu(params.pc)
-            params.avg_features = np.mean(params.features)
-        except:
-            params.features = np.zeros(len(params.pc))
-            params.avg_features = 0
-
-        # calculate random sampling weights
-        try:
-            params.weights = pow(preprocessing.minmax_scale(1-params.features, feature_range=(1,100)),2)
-            print('Sampling weights quantified')
-        except:
-            params.weights = np.zeros(len(params.pc))
-
-        # Reconfigure plot
-        params.plot_centre = compute_plot_centre(params.pc)
-        params.global_shift = params.pc[['x', 'y', 'z']].mean()#-params.pc[['x', 'y', 'z']].mean()
+        # if params.mode == 'predict':
+        #     print("Denoising using statistical outlier filter...")
+        #     params.pc = params.pc.iloc[denoise(params.pc, 50, 1.0)]
+        
         params.bbox = compute_bbox(params.pc[['x', 'y', 'z']])
-
-        if params.verbose: print('global shift:', params.global_shift.values)
-        params.pc[['x', 'y', 'z']] = params.pc[['x', 'y', 'z']] - params.global_shift
+        params.plot_centre = compute_plot_centre(params.pc)
 	
-        params.pc.reset_index(inplace=True)
-        params.pc.loc[:, 'pid'] = params.pc.index
+        #params.pc.reset_index(inplace=True)
+        #params.pc.loc[:, 'pid'] = params.pc.index
 
         #Classifying ground returns using cloth simulation
-        params.grdidx = classify_ground(params)
-        if params.mode == 'predict':
-            params.grd = params.pc.loc[params.pc.index[params.grdidx]]
-        else:
-            params.pc = params.pc.drop(params.pc.index[params.grdidx])
+        # params.grdidx = classify_ground(params)
+        # if params.mode == 'predict':
+        #     params.grd = params.pc.loc[params.pc.index[params.grdidx]]
+        # else:
+        #     params.pc = params.pc.drop(params.pc.index[params.grdidx])
 
         # generate bounding boxes
         xmin, xmax = np.floor(params.pc.x.min()), np.ceil(params.pc.x.max())

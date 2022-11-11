@@ -42,8 +42,9 @@ if __name__ == '__main__':
         
         parser.add_argument('--batch_size', type=int, default=2, help='Batch size for cuda processing [Lower less memory usage]')
         parser.add_argument('--augmentation', action='store_true', help="Perform data augmentation")
+        parser.add_argument('--validate', action='store_true', help="Perform model validation during training")
         parser.add_argument('--point_spacing', type=float, default=0.01, help="Downsampling resolution [set to 0 if no downsampling")
-
+        parser.add_argument('--stop_early', action='store_true', help="Break training run if validation loss continually increases")
         parser.add_argument('--verbose', action='store_true', help="print stuff")
 
         args = parser.parse_args()
@@ -56,8 +57,6 @@ if __name__ == '__main__':
         args.max_pts=20000
         
         #For now switch of evaluation 
-        args.evaluate = False
-        args.learning_rate = 0.001
         args.checkpoints = np.arange(0, args.num_epochs+1, int(args.num_epochs / args.checkpoint_saves))
         print('Saving ', len(args.checkpoints)-1, ' checkpoints.')
 
@@ -92,6 +91,6 @@ if __name__ == '__main__':
         '''
         Run semantic training. 
         '''
-
+        
         mp.spawn(SemanticTraining, nprocs=args.gpus, args=(args,)) 
 

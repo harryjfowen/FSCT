@@ -1,11 +1,8 @@
 import torch
 import torch.nn.functional as F
 from torch_geometric.nn import knn_interpolate
-from torch.nn import Sequential as Seq, Linear as Lin, ReLU, GELU, BatchNorm1d as BN
+from torch.nn import Sequential as Seq, Linear as Lin, ReLU, SELU, BatchNorm1d as BN
 from torch_geometric.nn import PointConv, fps, radius, global_max_pool
-import torch.optim as optim
-from torch.optim.lr_scheduler import ExponentialLR
-
 
 class SAModule(torch.nn.Module):
     def __init__(self, ratio, r, NN):
@@ -39,7 +36,7 @@ class GlobalSAModule(torch.nn.Module):
 
 def MLP(channels, batch_norm=True):
     return Seq(*[
-            Seq(Lin(channels[i - 1], channels[i]), GELU(), BN(channels[i]))
+            Seq(Lin(channels[i - 1], channels[i]), SELU(), BN(channels[i]))
             for i in range(1, len(channels))
     ])
 
@@ -61,9 +58,8 @@ class FPModule(torch.nn.Module):
 class Net(torch.nn.Module):
     def __init__(self, num_classes):
         super(Net, self).__init__()
-        # idea why this isn't working... too many points?
-        self.sa1_module = SAModule(0.1, 0.2, MLP([3, 128, 256, 512]))
-        self.sa2_module = SAModule(0.05, 0.4, MLP([512 + 3, 512, 1024, 1024]))
+        self.sa1_module = SAModule(0.2, 0.1, MLP([3, 128, 256, 512]))
+        self.sa2_module = SAModule(0.1, 0.2, MLP([512 + 3, 512, 1024, 1024]))
         self.sa3_module = GlobalSAModule(MLP([1024 + 3, 1024, 2048, 2048]))
 
         self.fp3_module = FPModule(1, MLP([3072, 1024, 1024]))
@@ -72,7 +68,7 @@ class Net(torch.nn.Module):
 
         self.conv1 = torch.nn.Conv1d(1024, 1024, 1)
         self.conv2 = torch.nn.Conv1d(1024, num_classes, 1)
-        self.drop1 = torch.nn.Dropout(0.5)
+        self.drop1 = torch.nn.Dropout(0.1)
         self.bn1 = torch.nn.BatchNorm1d(1024)
 
     def forward(self, data):
@@ -87,8 +83,9 @@ class Net(torch.nn.Module):
 
         x = x.unsqueeze(dim=0)
         x = x.permute(0, 2, 1)
-        #x = self.drop1(F.gelu(self.bn1(self.conv1(x))))
-        x = F.gelu(self.bn1(self.conv1(x)))
+        #x = self.drop1(F.selu(self.bn1(self.conv1(x))))
+        x = F.selu(self.bn1(self.conv1(x)))
         x = self.conv2(x)
+        x = torch.squeeze(x,dim=0).permute(1,0)
         #x = F.log_softmax(x, dim=1)
         return x
